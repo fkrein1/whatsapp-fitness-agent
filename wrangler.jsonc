@@ -6,4 +6,12 @@
   "ai": {
     "binding": "AI",
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "whatsapp-fitness-agent",
+      "database_id": "e4dec91e-0fb9-4e4f-a2bb-e4db040f5356",
+      "migrations_dir": "drizzle",
+    },
+  ],
 }

@@ -9,17 +9,31 @@
     "check": "pnpm lint && pnpm format:check && pnpm typecheck",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply whatsapp-fitness-agent --local",
+    "db:migrate:remote": "wrangler d1 migrations apply whatsapp-fitness-agent --remote",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "start": "wrangler dev",
-    "typecheck": "wrangler types --check && tsc --noEmit"
+    "test": "vitest run --maxWorkers=50%",
+    "test:watch": "vitest --maxWorkers=50%",
+    "typecheck": "wrangler types --check && tsc --noEmit && tsc -p test/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.0.0",
+    "@types/node": "^26.2.0",
+    "drizzle-kit": "^0.31.10",
     "oxfmt": "^0.64.0",
     "oxlint": "^1.79.0",
     "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
     "wrangler": "^4.125.0"
   },
   "packageManager": "pnpm@11.22.0"
