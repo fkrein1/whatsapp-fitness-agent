@@ -13,6 +13,7 @@ import {
   getDailyMeals,
   getExerciseCatalog,
   getLatestPendingMealProposal,
+  getRecentActiveMealsForSender,
   getRecentWeights,
   manageRecords,
   queryMeals,
@@ -25,7 +26,7 @@ import {
   saveIngestion,
   updateLatestMealProposal,
 } from "../src/db/repository";
-import { exerciseSets, fitnessEvents, recordChanges } from "../src/db/schema";
+import { exerciseSets, fitnessEvents, mealItems, recordChanges } from "../src/db/schema";
 
 describe("fitness repository", () => {
   it("claims a WhatsApp message only once", async () => {
@@ -142,6 +143,69 @@ describe("fitness repository", () => {
     expect(await getRecentWeights(db, 7)).toEqual([
       expect.objectContaining({ value: 80, unit: "kg" }),
     ]);
+  });
+
+  it("returns recent active meals with correction references for conversational follow-ups", async () => {
+    const db = createDatabase(env.DB);
+    const senderId = `sender-${crypto.randomUUID()}`;
+    const now = new Date();
+    const sourceMessageId = await claimSourceMessage(db, {
+      ...sourceMessage("recent-meal"),
+      senderId,
+      receivedAt: now,
+    });
+    await saveIngestion(
+      db,
+      sourceMessageId!,
+      { events: [mealEvent(now.toISOString(), "Recent yogurt", 90)], query: null, reply: "Saved." },
+      now,
+    );
+
+    const recent = await getRecentActiveMealsForSender(
+      db,
+      senderId,
+      new Date(now.getTime() + 5 * 60 * 1000),
+    );
+    expect(recent).toEqual([
+      expect.objectContaining({
+        ref: expect.any(String),
+        summary: "Recent yogurt",
+        totals: expect.objectContaining({ caloriesKcal: 90 }),
+        items: [expect.objectContaining({ ref: expect.any(String), name: "Recent yogurt" })],
+      }),
+    ]);
+  });
+
+  it("rejects negative nutrition at the database boundary", async () => {
+    const db = createDatabase(env.DB);
+    const now = new Date("2040-06-13T18:00:00Z");
+    const sourceMessageId = await claimSourceMessage(db, sourceMessage("negative-nutrition"));
+    await saveIngestion(
+      db,
+      sourceMessageId!,
+      { events: [mealEvent(now.toISOString(), "Dinner", 500)], query: null, reply: "Saved." },
+      now,
+    );
+    const [event] = await db
+      .select({ id: fitnessEvents.id })
+      .from(fitnessEvents)
+      .where(eq(fitnessEvents.sourceMessageId, sourceMessageId!));
+
+    await expect(
+      db.insert(mealItems).values({
+        id: crypto.randomUUID(),
+        eventId: event.id,
+        name: "Estorno",
+        quantity: 1,
+        unit: "registro",
+        caloriesKcal: -500,
+        proteinGrams: null,
+        carbsGrams: null,
+        fatGrams: null,
+        confidence: 1,
+        nutritionSource: "user_provided",
+      }),
+    ).rejects.toThrow();
   });
 
   it("does not save an image meal until the user approves it", async () => {

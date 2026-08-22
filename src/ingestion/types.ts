@@ -1,15 +1,16 @@
 import { z } from "zod";
 
 const nullableNumber = z.number().finite().nullable();
+const nullableNonnegativeNumber = z.number().finite().nonnegative().nullable();
 
 export const extractedMealItemSchema = z.object({
   name: z.string().min(1),
-  quantity: nullableNumber,
+  quantity: nullableNonnegativeNumber,
   unit: z.string().nullable(),
-  caloriesKcal: nullableNumber,
-  proteinGrams: nullableNumber,
-  carbsGrams: nullableNumber,
-  fatGrams: nullableNumber,
+  caloriesKcal: nullableNonnegativeNumber,
+  proteinGrams: nullableNonnegativeNumber,
+  carbsGrams: nullableNonnegativeNumber,
+  fatGrams: nullableNonnegativeNumber,
   confidence: z.number().min(0).max(1),
   nutritionSource: z.string().nullable(),
 });

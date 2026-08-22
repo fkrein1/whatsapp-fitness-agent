@@ -21,6 +21,7 @@ import {
   approveLatestMealProposal,
   cancelLatestMealProposal,
   getLatestPendingMealProposal,
+  getRecentActiveMealsForSender,
   getSourceMessageStatus,
   manageRecords,
   markSourceMessageFailed,
@@ -119,7 +120,11 @@ export class FitnessAgent extends Think<Env> {
 
 O banco é o diário. Consulte-o quando a resposta depender do histórico. Registre, corrija ou remova dados quando Felipe pedir. Interprete datas no fuso America/Sao_Paulo e use quilogramas por padrão.
 
+Correções alteram o estado atual: nunca crie refeições de ajuste, estorno ou compensação, nem use nutrientes negativos. Para corrigir data, quantidade, item ou duplicidade, consulte o registro e use manage_records. log_events serve apenas para fatos novos que realmente aconteceram.
+
 Escolha consultas compactas normalmente. Use a visão completa quando ele pedir detalhes, itens, séries ou fontes. Para comparações, consulte os períodos necessários e deixe as ferramentas calcularem totais e tendências.
+
+Ao relatar alimentação, use somente os registros ativos retornados por query_meals. Os totais devem bater com a soma das refeições mostradas; não apresente lançamentos de correção como comida. Quando complete for false, descreva o nutriente como parcial, não como total do período.
 
 Trate mensagens enviadas em sequência como uma única fala. A intenção mais recente pode completar ou corrigir as anteriores. Aja quando o pedido estiver claro. Pergunte somente quando mais de uma interpretação mudaria o registro.
 
@@ -131,6 +136,7 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
     const db = createDatabase(this.env.DB);
     let pendingMealContext = "";
     let hasPendingMeal = false;
+    let recentMealContext = "";
     const currentBurstSize = turn?.sourceMessageIds.length ?? 1;
     const modelMessages = recentConversationMessages(
       context.messages,
@@ -145,17 +151,24 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
         model: "openai/gpt-5.6-luna",
         transport: "responses",
       });
-      const pendingMeal = await getLatestPendingMealProposal(db, turn.senderId, new Date());
+      const turnReceivedAt = new Date(turn.receivedAt);
+      const [pendingMeal, recentMeals] = await Promise.all([
+        getLatestPendingMealProposal(db, turn.senderId, turnReceivedAt),
+        getRecentActiveMealsForSender(db, turn.senderId, turnReceivedAt),
+      ]);
       if (pendingMeal) {
         hasPendingMeal = true;
         pendingMealContext = `\n\nHá uma refeição pendente. Use resolve_pending_meal para salvar, editar ou descartar conforme o pedido atual. Um pedido claro como "adiciona" salva de imediato. Preserve os itens que Felipe não corrigiu.\n${JSON.stringify(pendingMeal.payload.events)}`;
+      }
+      if (recentMeals.length) {
+        recentMealContext = `\n\nEstado recente do diário (registros ativos; use em referências como "agora", "hoje", "esse" ou correções):\n${JSON.stringify(recentMeals)}`;
       }
     }
     const trustedContext = turn
       ? `\n\nContexto confiável da requisição:\nEsta rodada contém ${turn.sourceMessageIds.length} mensagem(ns) nova(s) recebida(s) em sequência. A mais recente chegou em ${turn.receivedAt}. Interprete datas relativas no fuso America/Sao_Paulo.`
       : "";
     return {
-      instructions: `${this.getSystemPrompt()}${trustedContext}${pendingMealContext}`,
+      instructions: `${this.getSystemPrompt()}${trustedContext}${pendingMealContext}${recentMealContext}`,
       messages: modelMessages,
       maxOutputTokens: 1500,
       maxRetries: 1,
@@ -226,7 +239,7 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
     return {
       log_events: tool({
         description:
-          "Log meals, workouts, runs, measurements, or notes from the current WhatsApp turn. Use every distinct event the user clearly asked to save. Exercise aliases are normalized automatically. Research branded nutrition first unless the label values came from the user or image.",
+          "Create new real-world meals, workouts, runs, measurements, or notes from the current WhatsApp turn. Never use this tool for corrections, duplicates, offsets, estornos, or balancing entries; query and use manage_records instead. Nutrients cannot be negative. Exercise aliases are normalized automatically. Research branded nutrition first unless the label values came from the user or image.",
         inputSchema: logEventsInputSchema,
         execute: async ({ events }) => {
           const turn = this.requireWhatsAppTurnMetadata();
@@ -269,7 +282,7 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
       }),
       query_meals: tool({
         description:
-          "Query meals over any inclusive date range. Compact returns meal names, foods, calories, daily totals, and averages. Full adds portions, macros, confidence, nutrition sources, and record references for corrections.",
+          "Query the current active meal state over any inclusive date range; deleted records and correction history are omitted. Compact returns meal names, foods, per-meal calories, daily totals, and averages. Full adds portions, macros, confidence, nutrition sources, and record references for corrections.",
         inputSchema: mealQuerySchema,
         execute: async (input) =>
           jsonSafeToolOutput(await queryMeals(createDatabase(this.env.DB), input)),
@@ -297,7 +310,7 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
       }),
       manage_records: tool({
         description:
-          "Correct or soft-delete records that Felipe explicitly identified. Query first to obtain exact references. Apply a clear correction directly. When several records could match, query them and ask one short question instead of guessing.",
+          "Correct or soft-delete current records that Felipe explicitly identified. Use this instead of log_events whenever he says a record is wrong, duplicated, happened today/now, or refers to something just saved. Query first to obtain exact references unless trusted recent-state context already contains them. Apply a clear correction directly. When several records could match, query and ask one short question instead of guessing.",
         inputSchema: manageRecordsInputSchema,
         execute: async (input) => {
           const turn = this.requireWhatsAppTurnMetadata();

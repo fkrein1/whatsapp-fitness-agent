@@ -560,6 +560,68 @@ export async function getDailyMeals(db: Database, day: Date, timeZone = "America
   };
 }
 
+export async function getRecentActiveMealsForSender(
+  db: Database,
+  senderId: string,
+  now: Date,
+  lookbackMinutes = 30,
+) {
+  const cutoff = new Date(now.getTime() - lookbackMinutes * 60 * 1000);
+  const events = await db
+    .select({
+      id: fitnessEvents.id,
+      occurredAt: fitnessEvents.occurredAt,
+      summary: fitnessEvents.summary,
+      createdAt: fitnessEvents.createdAt,
+    })
+    .from(fitnessEvents)
+    .innerJoin(sourceMessages, eq(fitnessEvents.sourceMessageId, sourceMessages.id))
+    .where(
+      and(
+        eq(sourceMessages.senderId, senderId),
+        eq(fitnessEvents.kind, "meal"),
+        gte(fitnessEvents.createdAt, cutoff),
+        isNull(fitnessEvents.deletedAt),
+      ),
+    )
+    .orderBy(desc(fitnessEvents.createdAt))
+    .limit(3);
+
+  const items = events.length
+    ? await db
+        .select({
+          id: mealItems.id,
+          eventId: mealItems.eventId,
+          name: mealItems.name,
+          quantity: mealItems.quantity,
+          unit: mealItems.unit,
+          caloriesKcal: mealItems.caloriesKcal,
+          proteinGrams: mealItems.proteinGrams,
+          carbsGrams: mealItems.carbsGrams,
+          fatGrams: mealItems.fatGrams,
+        })
+        .from(mealItems)
+        .where(
+          inArray(
+            mealItems.eventId,
+            events.map((event) => event.id),
+          ),
+        )
+    : [];
+  const itemsByEvent = groupBy(items, (item) => item.eventId);
+
+  return events.map((event) => {
+    const eventItems = itemsByEvent.get(event.id) ?? [];
+    return {
+      ref: event.id,
+      occurredAt: event.occurredAt,
+      summary: event.summary,
+      totals: nutritionTotals(eventItems),
+      items: eventItems.map(({ id, eventId: _eventId, ...item }) => ({ ref: id, ...item })),
+    };
+  });
+}
+
 function getDayRange(day: Date, timeZone: string) {
   const localDate = formatDateInTimeZone(day, timeZone);
   const start = localMidnightToUtc(localDate, timeZone);

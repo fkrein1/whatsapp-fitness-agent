@@ -57,6 +57,13 @@
       "when": 1787435469793,
       "tag": "0007_canonicalize_remaining_kettlebell_names",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787436241171,
+      "tag": "0008_prevent_negative_nutrition",
+      "breakpoints": true
     }
   ]
 }

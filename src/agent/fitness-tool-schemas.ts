@@ -143,12 +143,12 @@ const updateMealItemActionSchema = z.object({
   action: z.literal("update_meal_item"),
   itemRef: z.string().uuid().describe("Meal-item reference returned by a full meal query."),
   name: z.string().min(1).optional(),
-  quantity: z.number().finite().nullable().optional(),
+  quantity: z.number().finite().nonnegative().nullable().optional(),
   unit: z.string().nullable().optional(),
-  caloriesKcal: z.number().finite().nullable().optional(),
-  proteinGrams: z.number().finite().nullable().optional(),
-  carbsGrams: z.number().finite().nullable().optional(),
-  fatGrams: z.number().finite().nullable().optional(),
+  caloriesKcal: z.number().finite().nonnegative().nullable().optional(),
+  proteinGrams: z.number().finite().nonnegative().nullable().optional(),
+  carbsGrams: z.number().finite().nonnegative().nullable().optional(),
+  fatGrams: z.number().finite().nonnegative().nullable().optional(),
 });
 
 const updateExerciseSetActionSchema = z.object({
