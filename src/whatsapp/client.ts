@@ -6,20 +6,61 @@ type MediaDownload = {
 };
 
 export async function sendWhatsAppText(to: string, body: string, env: AppBindings) {
-  await callWhatsApp(
-    {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "text",
-      text: { body: body.slice(0, 4096) },
-    },
-    env,
+  await retryWhatsAppRequest(() =>
+    callWhatsApp(
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "text",
+        text: { body: body.slice(0, 4096) },
+      },
+      env,
+    ),
   );
 }
 
-export async function markMessageRead(messageId: string, env: AppBindings) {
-  await callWhatsApp({ messaging_product: "whatsapp", status: "read", message_id: messageId }, env);
+export async function markMessageRead(
+  messageId: string,
+  env: AppBindings,
+  options: { typing?: boolean } = {},
+) {
+  const body = {
+    messaging_product: "whatsapp",
+    status: "read",
+    message_id: messageId,
+    ...(options.typing ? { typing_indicator: { type: "text" } } : {}),
+  };
+
+  try {
+    await callWhatsApp(body, env);
+  } catch (error) {
+    if (!options.typing) throw error;
+    await callWhatsApp(
+      { messaging_product: "whatsapp", status: "read", message_id: messageId },
+      env,
+    );
+  }
+}
+
+export async function keepWhatsAppTyping(
+  messageId: string,
+  env: AppBindings,
+  signal: AbortSignal,
+  intervalMs = 20_000,
+) {
+  while (!signal.aborted) {
+    await waitForAbortOrTimeout(signal, intervalMs);
+    if (signal.aborted) return;
+    try {
+      await markMessageRead(messageId, env, { typing: true });
+    } catch (error) {
+      console.warn("Failed to refresh WhatsApp typing indicator", {
+        messageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 export async function downloadWhatsAppMedia(
@@ -65,6 +106,46 @@ async function callWhatsApp(body: object, env: AppBindings) {
   );
 
   if (!response.ok) {
-    throw new Error(`WhatsApp request failed (${response.status}): ${await response.text()}`);
+    throw new WhatsAppRequestError(response.status, await response.text());
   }
+}
+
+class WhatsAppRequestError extends Error {
+  constructor(
+    readonly status: number,
+    responseBody: string,
+  ) {
+    super(`WhatsApp request failed (${status}): ${responseBody}`);
+  }
+}
+
+async function retryWhatsAppRequest(operation: () => Promise<void>) {
+  const delays = [0, 250, 750];
+  let lastError: unknown;
+  for (const delayMs of delays) {
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (error instanceof WhatsAppRequestError && error.status < 500 && error.status !== 429) {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
+}
+
+function waitForAbortOrTimeout(signal: AbortSignal, timeoutMs: number) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const timeout = setTimeout(done, timeoutMs);
+    signal.addEventListener("abort", done, { once: true });
+
+    function done() {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 }

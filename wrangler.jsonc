@@ -7,13 +7,6 @@
   "ai": {
     "binding": "AI",
   },
-  "workflows": [
-    {
-      "name": "fitness-ingestion",
-      "binding": "FITNESS_INGESTION",
-      "class_name": "FitnessIngestionWorkflow",
-    },
-  ],
   "durable_objects": {
     "bindings": [
       {

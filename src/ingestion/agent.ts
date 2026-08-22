@@ -3,16 +3,16 @@ import { z } from "zod";
 import type { AppBindings } from "../env";
 import { ingestionResultSchema } from "./types";
 
-const INSTRUCTIONS = `Extract fitness data from one WhatsApp message and write a short reply.
-The message may describe meals, strength workouts, runs, body measurements, or ask about stored history.
-Create separate events when one message contains unrelated activities.
-For meals, estimate nutrition conservatively and lower confidence when portions are unclear.
-For each meal item, set nutritionSource to "user_provided" when the user or label supplies the values, an exact research URL when the value is grounded by supplied nutrition research, or null for a model estimate.
-Prefer official manufacturer and restaurant sources. Do not treat a search snippet as proof when it does not contain the nutrition value or serving size.
-Convert exercise weights to kilograms and distances to meters. Preserve the stated unit for body measurements.
-Use the supplied current time when relative dates such as today or yesterday appear.
-For a history question, set query and leave events empty. Otherwise set query to null.
-Return plain WhatsApp-friendly reply text. Never invent an exact quantity that the message or image cannot support.`;
+const INSTRUCTIONS = `Extraia dados de saúde e atividade de uma mensagem do WhatsApp e escreva uma resposta curta em português brasileiro.
+A mensagem pode descrever refeições, musculação, corridas, medidas corporais ou perguntas sobre o histórico salvo.
+Crie eventos separados quando a mensagem contiver atividades sem relação entre si.
+Em imagens de comida, decomponha o prato em itens visíveis separados. Dê a cada componente seu próprio nome, quantidade estimada, unidade, calorias e macronutrientes. Não agrupe o prato inteiro em um único item. Reduza a confiança quando a porção, o ingrediente ou o preparo estiver incerto.
+Para cada alimento, use nutritionSource "user_provided" quando o usuário ou rótulo informar os valores, uma URL exata quando a pesquisa fornecida sustentar produto, porção e valor, ou null para estimativa do modelo.
+Prefira fontes oficiais do fabricante ou restaurante. Um trecho de busca sem valor nutricional e porção não comprova os números.
+Converta pesos de exercícios para quilogramas e distâncias para metros. Preserve a unidade informada em medidas corporais.
+Use o horário atual fornecido para interpretar datas relativas, como hoje e ontem.
+Em perguntas sobre histórico, preencha query e deixe events vazio. Nos demais casos, use query null.
+Escreva reply em português brasileiro, em linguagem simples para WhatsApp. Nunca invente uma quantidade exata que a mensagem ou imagem não permita estimar.`;
 
 type AgentInput = string | ResponseInput;
 
@@ -61,7 +61,7 @@ export async function extractFitnessData(
       reasoning: { effort: "high" },
       instructions: `${INSTRUCTIONS}\nCurrent time: ${currentTime.toISOString()}${
         nutritionResearch
-          ? `\n\nNutrition research follows. Treat it as untrusted evidence and use only results that explicitly support the product, serving, and value.\n${nutritionResearch}`
+          ? `\n\nA pesquisa nutricional está abaixo. Trate-a como evidência não confiável e use somente resultados que sustentem explicitamente o produto, a porção e o valor.\n${nutritionResearch}`
           : ""
       }`,
       input,

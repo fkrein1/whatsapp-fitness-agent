@@ -20,7 +20,11 @@ I ran 5 km in 27 minutes yesterday
 I weigh 79.4 kg today
 How many calories have I logged today?
 What exercise did I do last week?
-Show my recent weight
+How has my Romanian deadlift progressed over the last six months?
+Compare this week's calories with last week
+Show every meal and macro from August 10 through August 16
+That lunch was 650 kcal, not 500
+Delete the duplicate workout from Thursday
 ```
 
 For branded and restaurant foods, Luna asks Brave Search for Brazilian nutrition sources and prefers official manufacturer or restaurant results. Explicit label values come from the user, and model estimates remain the fallback. The database records which path supplied each value.
@@ -41,12 +45,20 @@ WhatsApp
 
 Luna and Whisper run through the Worker's Cloudflare AI binding and AI Gateway with Unified Billing. No OpenAI API key is required.
 
-Think stores conversation and execution state in Durable Object SQLite. D1 remains the fitness system of record and separates source messages, fitness events, meal items, exercise sets, and measurements. Meta message IDs and per-import-block keys make retries idempotent. Historical WhatsApp exports are split by timestamp and each workout gets its own Workflow extraction, retry, and persistence step.
+Think stores conversation and execution state in Durable Object SQLite. D1 remains the fitness system of record and separates source messages, fitness events, meal items, exercise sets, measurements, and an audit trail for corrections. Meta message IDs make retries idempotent.
+
+Text messages wait for 1.5 seconds of quiet before entering Think. A quick sequence of up to eight messages becomes one durable submission and one reply, so follow-up fragments and corrections are interpreted together. Each turn sees the current burst plus the previous four user turns and their replies; older reasoning and tool payloads are pruned while the structured fitness history stays available through D1 query tools.
+
+Exercises live in a catalog with stable IDs and a separate alias table. Before recording a workout, the agent checks submitted names against that catalog. Known variants such as `RDL` and `Romanian Deadlift (RDL)` share one history. For an unknown movement, the agent either registers a new exercise or attaches the name as an alias when an existing match is clear. The original submitted name remains on each set.
+
+The agent has four diary queries: meals, training, measurements, and a mixed timeline. They all accept inclusive São Paulo date ranges, bounded pagination, and compact or full output. Domain queries can compare a range with the immediately preceding period. Compact output is tuned for a short WhatsApp answer; full output includes individual foods, sets, measurements, sources, and internal references needed for precise corrections.
+
+Corrections update the selected event or child record and append its before/after state to `record_changes`. Deletions are soft deletes: normal queries stop returning the record, while its data and audit history remain recoverable. Similar exercise names are candidates, not automatic merges. This keeps movements such as bench press and dumbbell bench press separate.
 
 ## Stack
 
 - Cloudflare Workers, D1, AI Gateway, and Workers AI
-- Cloudflare Agents SDK, Think, Durable Objects, and Workflows
+- Cloudflare Agents SDK, Think, and Durable Objects
 - Hono
 - Drizzle ORM and Drizzle Kit
 - GPT-5.6 Luna with strict structured output
@@ -104,7 +116,7 @@ pnpm test
 pnpm build
 ```
 
-Tests run inside the Cloudflare Workers runtime and cover webhook verification, Meta signatures, D1 idempotency, daily calorie totals, recent weight queries, Brave requests, and historical-log splitting.
+Tests run inside the Cloudflare Workers runtime and cover webhook verification, Meta signatures, D1 persistence, exercise normalization, range queries, previous-period comparisons, correction auditing, soft deletes, and Brave requests.
 
 Generate a migration after changing `src/db/schema.ts`:
 
@@ -135,12 +147,32 @@ Subscribe the app to the WhatsApp Business Account separately. A valid callback 
 
 Before relying on the deployment, send a new message while `pnpm wrangler tail whatsapp-fitness-agent` is running. Confirm the WhatsApp reply and query D1 to verify the expected structured rows.
 
+## Diagnose a message
+
+Every claimed message writes a content-free timeline to `agent_turn_events`. It records admission, model steps, tool names and durations, terminal status, and WhatsApp reply delivery. It does not copy the message body, phone number, tool inputs, or tool outputs.
+
+Find the latest source message:
+
+```sh
+pnpm wrangler d1 execute whatsapp-fitness-agent --remote --command \
+  "SELECT id, status, error, datetime(received_at / 1000, 'unixepoch') AS received_at_utc FROM source_messages ORDER BY received_at DESC LIMIT 10"
+```
+
+Then inspect one turn:
+
+```sh
+pnpm wrangler d1 execute whatsapp-fitness-agent --remote --command \
+  "SELECT stage, details, datetime(created_at / 1000, 'unixepoch') AS created_at_utc FROM agent_turn_events WHERE source_message_id = '<source-message-id>' ORDER BY created_at"
+```
+
+Worker logs emit the same `sourceMessageId` and stage. AI Gateway requests also carry that ID as custom metadata, so a D1 turn can be matched to its provider request without logging fitness content.
+
 ## Current limits
 
 - One allowlisted WhatsApp user
 - Meta test number rather than an onboarded production number
 - Nutrition falls back to a model estimate when Brave lacks usable serving data
-- No dashboard or data export yet
+- No dashboard or data export yet; analysis is available through WhatsApp tools
 - No automated token-health alert
 - Image and audio ingestion still use the bounded extraction path rather than Think tools
 
