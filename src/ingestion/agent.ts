@@ -21,7 +21,7 @@ export async function extractFitnessData(input: AgentInput, currentTime: Date, e
       reasoning: { effort: "high" },
       instructions: `${INSTRUCTIONS}\nCurrent time: ${currentTime.toISOString()}`,
       input,
-      max_output_tokens: 1800,
+      max_output_tokens: 8000,
       text: {
         format: {
           type: "json_schema",
