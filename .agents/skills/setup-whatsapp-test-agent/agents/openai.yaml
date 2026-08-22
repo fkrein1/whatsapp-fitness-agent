@@ -1,0 +1,4 @@
+interface:
+  display_name: "Set up WhatsApp test agent"
+  short_description: "Connect Meta test WhatsApp to this Worker"
+  default_prompt: "Use $setup-whatsapp-test-agent to configure this repo with a Meta WhatsApp test number and verify the full reply loop."

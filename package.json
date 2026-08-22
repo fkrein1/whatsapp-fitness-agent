@@ -1,0 +1,26 @@
+{
+  "name": "whatsapp-fitness-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "cf-typegen": "wrangler types",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "start": "wrangler dev",
+    "typecheck": "wrangler types --check && tsc --noEmit"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.125.0"
+  },
+  "packageManager": "pnpm@11.22.0"
+}
