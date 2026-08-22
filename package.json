@@ -40,8 +40,14 @@
     "typecheck": "wrangler types --check && tsc --noEmit && tsc -p test/tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@cloudflare/ai-chat": "^0.10.2",
+    "@cloudflare/shell": "^0.4.3",
+    "@cloudflare/think": "^0.16.0",
+    "agents": "^0.21.0",
+    "ai": "^7.0.73",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.3",
+    "workers-ai-provider": "^4.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -54,5 +60,12 @@
     "vitest": "^4.1.11",
     "wrangler": "^4.125.0"
   },
-  "packageManager": "pnpm@11.22.0"
+  "packageManager": "pnpm@11.22.0",
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "@mongodb-js/zstd",
+      "core-js-pure",
+      "node-liblzma"
+    ]
+  }
 }

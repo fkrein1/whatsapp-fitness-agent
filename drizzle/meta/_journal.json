@@ -8,6 +8,13 @@
       "when": 1787400104591,
       "tag": "0000_greedy_captain_stacy",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787403117643,
+      "tag": "0001_rich_penance",
+      "breakpoints": true
     }
   ]
 }

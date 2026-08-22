@@ -31,7 +31,9 @@ For branded and restaurant foods, Luna asks Brave Search for Brazilian nutrition
 WhatsApp
   -> Meta Cloud API webhook
   -> Hono Worker with signature and sender checks
-  -> GPT-5.6 Luna for text and image extraction
+  -> Cloudflare Think agent for durable, queued text turns and tool calls
+  -> Cloudflare Workflow for retryable multi-workout imports
+  -> GPT-5.6 Luna for extraction and reasoning
      or Cloudflare Whisper for voice-note transcription
   -> Drizzle ORM and Cloudflare D1
   -> WhatsApp reply
@@ -39,11 +41,12 @@ WhatsApp
 
 Luna and Whisper run through the Worker's Cloudflare AI binding and AI Gateway with Unified Billing. No OpenAI API key is required.
 
-The D1 schema separates source messages, fitness events, meal items, exercise sets, and measurements. A unique Meta message ID makes webhook retries idempotent. WhatsApp read receipts and replies are best-effort side effects, so a Meta API failure does not discard fitness data that was already extracted.
+Think stores conversation and execution state in Durable Object SQLite. D1 remains the fitness system of record and separates source messages, fitness events, meal items, exercise sets, and measurements. Meta message IDs and per-import-block keys make retries idempotent. Historical WhatsApp exports are split by timestamp and each workout gets its own Workflow extraction, retry, and persistence step.
 
 ## Stack
 
 - Cloudflare Workers, D1, AI Gateway, and Workers AI
+- Cloudflare Agents SDK, Think, Durable Objects, and Workflows
 - Hono
 - Drizzle ORM and Drizzle Kit
 - GPT-5.6 Luna with strict structured output
@@ -101,7 +104,7 @@ pnpm test
 pnpm build
 ```
 
-Tests run inside the Cloudflare Workers runtime and cover webhook verification, Meta signatures, D1 idempotency, daily calorie totals, and recent weight queries.
+Tests run inside the Cloudflare Workers runtime and cover webhook verification, Meta signatures, D1 idempotency, daily calorie totals, recent weight queries, Brave requests, and historical-log splitting.
 
 Generate a migration after changing `src/db/schema.ts`:
 
@@ -139,6 +142,7 @@ Before relying on the deployment, send a new message while `pnpm wrangler tail w
 - Nutrition falls back to a model estimate when Brave lacks usable serving data
 - No dashboard or data export yet
 - No automated token-health alert
+- Image and audio ingestion still use the bounded extraction path rather than Think tools
 
 ## Privacy
 

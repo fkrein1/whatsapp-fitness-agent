@@ -31,21 +31,30 @@ export async function saveIngestion(
   sourceMessageId: string,
   result: IngestionResult,
   fallbackOccurredAt: Date,
+  options: { externalKeyPrefix?: string; finalize?: boolean } = {},
 ) {
-  for (const event of result.events) {
+  for (const [eventIndex, event] of result.events.entries()) {
     const eventId = crypto.randomUUID();
     const occurredAt = event.occurredAt ? new Date(event.occurredAt) : fallbackOccurredAt;
 
-    await db.insert(fitnessEvents).values({
-      id: eventId,
-      sourceMessageId,
-      kind: event.kind,
-      occurredAt,
-      summary: event.summary,
-      confidence: event.confidence,
-      details: {},
-      createdAt: new Date(),
-    });
+    const inserted = await db
+      .insert(fitnessEvents)
+      .values({
+        id: eventId,
+        externalKey: options.externalKeyPrefix
+          ? `${options.externalKeyPrefix}:${eventIndex}`
+          : null,
+        sourceMessageId,
+        kind: event.kind,
+        occurredAt,
+        summary: event.summary,
+        confidence: event.confidence,
+        details: {},
+        createdAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .returning({ id: fitnessEvents.id });
+    if (!inserted.length) continue;
 
     if (event.mealItems.length) {
       await db.insert(mealItems).values(
@@ -75,10 +84,28 @@ export async function saveIngestion(
     }
   }
 
+  if (options.finalize ?? true) await markSourceMessageProcessed(db, sourceMessageId);
+}
+
+export async function markSourceMessageProcessing(db: Database, id: string) {
+  await db
+    .update(sourceMessages)
+    .set({ status: "processing", error: null })
+    .where(eq(sourceMessages.id, id));
+}
+
+export async function markSourceMessageProcessed(db: Database, id: string) {
   await db
     .update(sourceMessages)
     .set({ status: "processed", processedAt: new Date(), error: null })
-    .where(eq(sourceMessages.id, sourceMessageId));
+    .where(eq(sourceMessages.id, id));
+}
+
+export async function markSourceMessagePartial(db: Database, id: string, error: string) {
+  await db
+    .update(sourceMessages)
+    .set({ status: "partial", processedAt: new Date(), error: error.slice(0, 500) })
+    .where(eq(sourceMessages.id, id));
 }
 
 export async function markSourceMessageFailed(db: Database, id: string, error: string) {

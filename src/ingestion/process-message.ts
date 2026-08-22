@@ -12,6 +12,7 @@ import { downloadWhatsAppMedia, markMessageRead, sendWhatsAppText } from "../wha
 import type { WhatsAppMessage } from "../whatsapp/types";
 import { formatNutritionResearch, searchNutrition } from "../nutrition/brave";
 import { extractFitnessData, planNutritionResearch, transcribeAudio } from "./agent";
+import { splitHistoricalLog } from "./historical-log";
 
 export async function processMessage(message: WhatsAppMessage, env: AppBindings) {
   const db = createDatabase(env.DB);
@@ -37,6 +38,32 @@ export async function processMessage(message: WhatsAppMessage, env: AppBindings)
       messageId: message.id,
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+
+  const text = message.text?.body?.trim();
+  if (text && splitHistoricalLog(text).length) {
+    await env.FITNESS_INGESTION.create({
+      id: sourceMessageId,
+      params: {
+        sourceMessageId,
+        providerMessageId: message.id,
+        senderId: message.from,
+        text,
+        receivedAt: receivedAt.toISOString(),
+      },
+    });
+    return;
+  }
+
+  if (text) {
+    const agent = await getAgentByName<AppBindings, FitnessAgent>(env.FITNESS_AGENT, message.from);
+    await agent.submitWhatsAppText({
+      sourceMessageId,
+      providerMessageId: message.id,
+      text,
+      receivedAt: receivedAt.toISOString(),
+    });
+    return;
   }
 
   let reply: string;
@@ -175,3 +202,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
   }
   return btoa(binary);
 }
+import { getAgentByName } from "agents";
+
+import type { FitnessAgent } from "../agent/fitness-agent";

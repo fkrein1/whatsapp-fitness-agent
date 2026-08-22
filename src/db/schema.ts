@@ -13,7 +13,7 @@ export const sourceMessages = sqliteTable(
     text: text("text"),
     mediaId: text("media_id"),
     mimeType: text("mime_type"),
-    status: text("status", { enum: ["received", "processed", "failed"] })
+    status: text("status", { enum: ["received", "processing", "processed", "partial", "failed"] })
       .notNull()
       .default("received"),
     error: text("error"),
@@ -30,6 +30,7 @@ export const fitnessEvents = sqliteTable(
   "fitness_events",
   {
     id: text("id").primaryKey(),
+    externalKey: text("external_key").unique(),
     sourceMessageId: text("source_message_id")
       .notNull()
       .references(() => sourceMessages.id, { onDelete: "cascade" }),
