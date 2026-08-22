@@ -62,15 +62,17 @@ Use `wrangler tail` to locate the failing boundary:
 
 - Signature failure: the stored app secret belongs to another Meta app.
 - AI Gateway failure: check the `AI` binding, request schema, and Unified Billing credits.
-- WhatsApp `401` or OAuth failure: replace the expired dashboard token.
+- WhatsApp `401` with OAuth code `190`: validate `META_ACCESS_TOKEN` against `GET /{PHONE_NUMBER_ID}`. If it fails, replace the dashboard or Graph API Explorer token with a system-user token. Assign that system user full control of both the app and WhatsApp account, then grant `whatsapp_business_messaging` and `whatsapp_business_management` when generating the token.
 - WhatsApp permission failure: verify that token, WABA, and phone number belong to the same app and business.
 
 Keep message bodies, phone numbers, and credentials out of logs.
+
+Marking a message as read and sending the reply must not control whether valid fitness data is saved. Treat those Meta calls as separate side effects. Persist successful extraction first, then log reply failures without changing the stored ingestion to `failed`.
 
 Recovered when the same inbound message path produces one handset reply.
 
 ## Duplicate replies
 
-Meta sends status events and retries webhooks. Process only `value.messages` and acknowledge quickly. This repo has no durable deduplication; add KV, D1, or a Durable Object keyed by WhatsApp message ID if retries produce duplicate replies.
+Meta sends status events and retries webhooks. Process only `value.messages` and acknowledge quickly. This repo deduplicates through the unique provider message ID in D1. Check `source_messages` before adding another deduplication layer.
 
 Recovered when one inbound message produces one model call and one reply.

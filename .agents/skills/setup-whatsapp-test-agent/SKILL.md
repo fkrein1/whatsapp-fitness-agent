@@ -24,4 +24,4 @@ Read both only when setup encounters one of those failures.
 
 ## Completion gate
 
-Finish when one fresh message from `WHATSAPP_RECIPIENT` reaches the live Worker and produces a WhatsApp reply. Before handing off, verify the webhook challenge, WABA app subscription, and live tail. State that the dashboard token expires and that conversation history is currently stateless.
+Finish when one fresh message from `WHATSAPP_RECIPIENT` reaches the live Worker, produces a WhatsApp reply, and stores the expected D1 records. Before handing off, verify the webhook challenge, WABA app subscription, system-user token, live tail, and database rows.
