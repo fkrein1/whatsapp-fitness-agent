@@ -1,64 +1,143 @@
 # WhatsApp fitness agent
 
-A personal fitness log controlled through WhatsApp. The Cloudflare Worker accepts text, meal or workout images, and voice notes, extracts structured fitness events, stores them in D1, and replies through the WhatsApp test number.
+A single-user fitness log that lives in WhatsApp. Send a workout, run, meal photo, voice note, or body-weight update. The agent extracts structured records, stores them in Cloudflare D1, and answers questions about recent activity.
 
-GPT-5.6 Luna handles text and images through Cloudflare AI Gateway. Cloudflare Whisper transcribes audio. The Worker uses Unified Billing and does not need an OpenAI API key.
+The deployed version uses a Meta WhatsApp test number. Only the number configured as `WHATSAPP_RECIPIENT` can use it.
 
-## Data model
+## What it records
 
-Drizzle manages a hybrid D1 schema:
+- Strength workouts with individual sets, reps, and weight
+- Runs with distance and duration
+- Meals with estimated calories, macros, confidence, and source
+- Body measurements such as weekly weight
+- Original WhatsApp message and media metadata for provenance and deduplication
 
-- Source messages provide idempotency and input provenance.
-- Fitness events represent meals, workouts, runs, measurements, and notes.
-- Meal items keep calories and macros queryable while recording estimate confidence and source.
-- Exercise sets store reps, weight, duration, and distance.
-- Measurements store weight and other periodic body metrics with their original unit.
+Example messages:
 
-This supports questions such as daily calories, exercise over a recent period, and weekly weight history. The agent is currently single-user and stateless outside the fitness records it retrieves for those queries.
+```text
+Bench press 3x8 at 65 kg, pull-ups 3x8
+I ran 5 km in 27 minutes yesterday
+I weigh 79.4 kg today
+How many calories have I logged today?
+What exercise did I do last week?
+Show my recent weight
+```
+
+Meal calories are estimates when the message or image does not contain exact nutrition data. The database keeps the estimate confidence and source instead of presenting uncertain values as measured facts.
+
+## How it works
+
+```text
+WhatsApp
+  -> Meta Cloud API webhook
+  -> Hono Worker with signature and sender checks
+  -> GPT-5.6 Luna for text and image extraction
+     or Cloudflare Whisper for voice-note transcription
+  -> Drizzle ORM and Cloudflare D1
+  -> WhatsApp reply
+```
+
+Luna and Whisper run through the Worker's Cloudflare AI binding and AI Gateway with Unified Billing. No OpenAI API key is required.
+
+The D1 schema separates source messages, fitness events, meal items, exercise sets, and measurements. A unique Meta message ID makes webhook retries idempotent. WhatsApp read receipts and replies are best-effort side effects, so a Meta API failure does not discard fitness data that was already extracted.
+
+## Stack
+
+- Cloudflare Workers, D1, AI Gateway, and Workers AI
+- Hono
+- Drizzle ORM and Drizzle Kit
+- GPT-5.6 Luna with strict structured output
+- Cloudflare Whisper Large v3 Turbo
+- Zod
+- Vitest with the Cloudflare Workers test pool
+
+## Prerequisites
+
+- Node.js and pnpm
+- A Cloudflare account with Workers AI or Unified Billing available
+- A Meta developer app with the WhatsApp use case
+- A WhatsApp test number and verified test recipient
+- A Meta system-user token with `whatsapp_business_messaging` and `whatsapp_business_management`
+
+The repository includes a setup skill with the tested Meta happy path and recovery steps for its stale UI:
+
+[`setup-whatsapp-test-agent`](.agents/skills/setup-whatsapp-test-agent/SKILL.md)
 
 ## Local setup
 
-Copy `.env.example` to `.env` and fill in the values. `WHATSAPP_RECIPIENT` is the only phone number the agent will answer, using digits only with country code.
-
-Run locally with:
+Install dependencies and create the environment file:
 
 ```sh
+pnpm install
+cp .env.example .env
+```
+
+Set these values in `.env`:
+
+| Variable                   | Purpose                                                |
+| -------------------------- | ------------------------------------------------------ |
+| `META_ACCESS_TOKEN`        | System-user token for the Meta Graph API               |
+| `META_APP_SECRET`          | Validates `X-Hub-Signature-256` webhook signatures     |
+| `WHATSAPP_API_VERSION`     | Graph API version, such as `v26.0`                     |
+| `WHATSAPP_PHONE_NUMBER_ID` | Opaque phone-number asset ID, not the displayed number |
+| `WHATSAPP_RECIPIENT`       | Allowed recipient in digits-only international format  |
+| `WHATSAPP_VERIFY_TOKEN`    | User-chosen webhook challenge secret                   |
+
+For a fork, create a D1 database and replace the `database_id` in `wrangler.jsonc`:
+
+```sh
+pnpm wrangler d1 create whatsapp-fitness-agent
+pnpm db:migrate:local
 pnpm dev
 ```
 
-Generate and apply database migrations with:
-
-```sh
-pnpm db:generate
-pnpm db:migrate:local
-```
-
-Run checks and Worker-runtime tests with:
+## Test and validate
 
 ```sh
 pnpm check
 pnpm test
+pnpm build
+```
+
+Tests run inside the Cloudflare Workers runtime and cover webhook verification, Meta signatures, D1 idempotency, daily calorie totals, and recent weight queries.
+
+Generate a migration after changing `src/db/schema.ts`:
+
+```sh
+pnpm db:generate
 ```
 
 ## Deploy
 
-Store the secrets in Cloudflare:
+Upload the environment values as encrypted Worker secrets, migrate D1, and deploy:
 
 ```sh
-pnpm wrangler secret put META_ACCESS_TOKEN
-pnpm wrangler secret put META_APP_SECRET
-pnpm wrangler secret put WHATSAPP_VERIFY_TOKEN
-```
-
-Apply D1 migrations, deploy, and configure Meta's callback URL as:
-
-```sh
+pnpm wrangler secret bulk .env
 pnpm db:migrate:remote
 pnpm deploy
 ```
 
+Configure Meta with:
+
 ```text
-https://<worker-name>.<account-subdomain>.workers.dev/webhook
+Callback URL: https://<worker-name>.<account-subdomain>.workers.dev/webhook
+Verify token: the value of WHATSAPP_VERIFY_TOKEN
+Webhook field: messages
+Client certificate attachment: off
 ```
 
-Use the same `WHATSAPP_VERIFY_TOKEN` when Meta asks for the verify token, then subscribe the WhatsApp Business Account webhook to the `messages` field.
+Subscribe the app to the WhatsApp Business Account separately. A valid callback does not imply that the WABA subscription exists.
+
+Before relying on the deployment, send a new message while `pnpm wrangler tail whatsapp-fitness-agent` is running. Confirm the WhatsApp reply and query D1 to verify the expected structured rows.
+
+## Current limits
+
+- One allowlisted WhatsApp user
+- Meta test number rather than an onboarded production number
+- Nutrition inferred by the model when exact product data is unavailable
+- No dashboard or data export yet
+- No automated token-health alert
+
+## Privacy
+
+The Worker exposes its data-handling policy at `/privacy`. Fitness messages and derived records are personal data. Do not make the agent multi-user without adding authentication, per-user isolation, retention controls, and deletion support.
