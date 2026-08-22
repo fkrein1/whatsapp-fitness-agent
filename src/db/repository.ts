@@ -321,7 +321,6 @@ export async function saveIngestion(
   options: {
     externalKeyPrefix?: string;
     finalize?: boolean;
-    dedupeWorkoutsByOccurredAt?: boolean;
   } = {},
 ) {
   let insertedEvents = 0;
@@ -344,32 +343,20 @@ export async function saveIngestion(
       createdAt: new Date(),
     };
 
-    const [sameWorkout] =
-      options.dedupeWorkoutsByOccurredAt && event.kind === "workout"
-        ? await db
-            .select({ id: fitnessEvents.id })
-            .from(fitnessEvents)
-            .where(and(eq(fitnessEvents.kind, "workout"), eq(fitnessEvents.occurredAt, occurredAt)))
-            .limit(1)
-        : [];
-    const insertedEvent = sameWorkout
-      ? []
-      : externalKey
-        ? await db
-            .insert(fitnessEvents)
-            .values(eventValues)
-            .onConflictDoNothing({ target: fitnessEvents.externalKey })
-            .returning({ id: fitnessEvents.id })
-        : await db.insert(fitnessEvents).values(eventValues).returning({ id: fitnessEvents.id });
-    const [savedEvent] = sameWorkout
-      ? [sameWorkout]
-      : insertedEvent.length
-        ? insertedEvent
-        : await db
-            .select({ id: fitnessEvents.id })
-            .from(fitnessEvents)
-            .where(eq(fitnessEvents.externalKey, externalKey!))
-            .limit(1);
+    const insertedEvent = externalKey
+      ? await db
+          .insert(fitnessEvents)
+          .values(eventValues)
+          .onConflictDoNothing({ target: fitnessEvents.externalKey })
+          .returning({ id: fitnessEvents.id })
+      : await db.insert(fitnessEvents).values(eventValues).returning({ id: fitnessEvents.id });
+    const [savedEvent] = insertedEvent.length
+      ? insertedEvent
+      : await db
+          .select({ id: fitnessEvents.id })
+          .from(fitnessEvents)
+          .where(eq(fitnessEvents.externalKey, externalKey!))
+          .limit(1);
     const eventId = savedEvent.id;
     if (insertedEvent.length) insertedEvents += 1;
     else reusedEvents += 1;

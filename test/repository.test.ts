@@ -12,7 +12,6 @@ import {
   getDailyCalories,
   getDailyMeals,
   getExerciseCatalog,
-  getExerciseProgress,
   getLatestPendingMealProposal,
   getRecentWeights,
   manageRecords,
@@ -350,65 +349,6 @@ describe("fitness repository", () => {
     ).toEqual(Array.from({ length: 15 }, (_, index) => ({ setNumber: index + 1 })));
   });
 
-  it("deduplicates bulk workouts by timestamp and queries canonical progression", async () => {
-    const db = createDatabase(env.DB);
-    const occurredAt = new Date("2025-06-10T12:00:00Z");
-    const sourceIds = await Promise.all(
-      ["first", "retry"].map((attempt) =>
-        claimSourceMessage(db, {
-          providerMessageId: `bulk.${attempt}.${crypto.randomUUID()}`,
-          senderId: "5511999999999",
-          inputType: "text",
-          text: "RDL: 3x8 70kg",
-          mediaId: null,
-          mimeType: null,
-          receivedAt: occurredAt,
-        }),
-      ),
-    );
-    const workout = {
-      events: [
-        {
-          kind: "workout" as const,
-          occurredAt: occurredAt.toISOString(),
-          summary: "Romanian deadlift",
-          confidence: 1,
-          mealItems: [],
-          exerciseSets: [1, 2, 3].map((setNumber) => ({
-            exercise: setNumber === 1 ? "RDL" : "Romanian Deadlift (RDL)",
-            setNumber,
-            reps: 8,
-            weightKg: 70,
-            durationSeconds: null,
-            distanceMeters: null,
-          })),
-          measurements: [],
-        },
-      ],
-      query: null,
-      reply: "Recorded.",
-    };
-
-    const first = await saveIngestion(db, sourceIds[0]!, workout, occurredAt, {
-      externalKeyPrefix: "bulk.first:0",
-      finalize: false,
-      dedupeWorkoutsByOccurredAt: true,
-    });
-    const retry = await saveIngestion(db, sourceIds[1]!, workout, occurredAt, {
-      externalKeyPrefix: "bulk.retry:0",
-      finalize: false,
-      dedupeWorkoutsByOccurredAt: true,
-    });
-
-    expect(first).toEqual({ insertedEvents: 1, reusedEvents: 0 });
-    expect(retry).toEqual({ insertedEvents: 0, reusedEvents: 1 });
-    const progress = await getExerciseProgress(db, "rdls", 3650);
-    expect(progress.exercise).toBe("Romanian Deadlift");
-    expect(progress.sessions).toEqual([
-      expect.objectContaining({ totalReps: 24, maxWeightKg: 70, volumeKg: 1680 }),
-    ]);
-  });
-
   it("resolves aliases and registers unknown exercises conservatively", async () => {
     const db = createDatabase(env.DB);
     expect(await resolveExerciseNames(db, ["RDL"])).toEqual([
@@ -438,6 +378,23 @@ describe("fitness repository", () => {
     expect(await getExerciseCatalog(db)).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: created.id, exercise: "Hack Squat" })]),
     );
+  });
+
+  it.each([
+    ["KT Swing", "Kettlebell Swing"],
+    ["HSPU", "Handstand Push Up"],
+    ["Barra fixa", "Pull-Up"],
+    ["Supino com halteres", "Dumbbell Bench Press"],
+    ["Extensão de joelho unilateral", "Single-Leg Extension"],
+    ["KT Reverse Lunge", "Kettlebell Reverse Lunge"],
+    ["KT Squat", "Kettlebell Squat"],
+  ])("resolves consolidated alias %s to %s", async (alias, canonicalName) => {
+    const db = createDatabase(env.DB);
+    expect(await resolveExerciseNames(db, [alias])).toEqual([
+      expect.objectContaining({
+        exact: expect.objectContaining({ canonicalName }),
+      }),
+    ]);
   });
 
   it("queries meals by range with compact, full, and previous-period views", async () => {
