@@ -53,7 +53,7 @@ export async function saveIngestion(
           id: crypto.randomUUID(),
           eventId,
           ...item,
-          nutritionSource: "model_estimate",
+          nutritionSource: item.nutritionSource ?? "model_estimate",
         })),
       );
     }

@@ -8,7 +8,7 @@ The deployed version uses a Meta WhatsApp test number. Only the number configure
 
 - Strength workouts with individual sets, reps, and weight
 - Runs with distance and duration
-- Meals with estimated calories, macros, confidence, and source
+- Meals with calories, macros, confidence, and a source URL when Brave finds supporting nutrition data
 - Body measurements such as weekly weight
 - Original WhatsApp message and media metadata for provenance and deduplication
 
@@ -23,7 +23,7 @@ What exercise did I do last week?
 Show my recent weight
 ```
 
-Meal calories are estimates when the message or image does not contain exact nutrition data. The database keeps the estimate confidence and source instead of presenting uncertain values as measured facts.
+For branded and restaurant foods, Luna asks Brave Search for Brazilian nutrition sources and prefers official manufacturer or restaurant results. Explicit label values come from the user, and model estimates remain the fallback. The database records which path supplied each value.
 
 ## How it works
 
@@ -48,6 +48,7 @@ The D1 schema separates source messages, fitness events, meal items, exercise se
 - Drizzle ORM and Drizzle Kit
 - GPT-5.6 Luna with strict structured output
 - Cloudflare Whisper Large v3 Turbo
+- Brave Search API for branded-food nutrition research
 - Zod
 - Vitest with the Cloudflare Workers test pool
 
@@ -74,14 +75,15 @@ cp .env.example .env
 
 Set these values in `.env`:
 
-| Variable                   | Purpose                                                |
-| -------------------------- | ------------------------------------------------------ |
-| `META_ACCESS_TOKEN`        | System-user token for the Meta Graph API               |
-| `META_APP_SECRET`          | Validates `X-Hub-Signature-256` webhook signatures     |
-| `WHATSAPP_API_VERSION`     | Graph API version, such as `v26.0`                     |
-| `WHATSAPP_PHONE_NUMBER_ID` | Opaque phone-number asset ID, not the displayed number |
-| `WHATSAPP_RECIPIENT`       | Allowed recipient in digits-only international format  |
-| `WHATSAPP_VERIFY_TOKEN`    | User-chosen webhook challenge secret                   |
+| Variable                   | Purpose                                                 |
+| -------------------------- | ------------------------------------------------------- |
+| `META_ACCESS_TOKEN`        | System-user token for the Meta Graph API                |
+| `META_APP_SECRET`          | Validates `X-Hub-Signature-256` webhook signatures      |
+| `BRAVE_SEARCH_API_KEY`     | Grounds branded-food nutrition in Brazilian web results |
+| `WHATSAPP_API_VERSION`     | Graph API version, such as `v26.0`                      |
+| `WHATSAPP_PHONE_NUMBER_ID` | Opaque phone-number asset ID, not the displayed number  |
+| `WHATSAPP_RECIPIENT`       | Allowed recipient in digits-only international format   |
+| `WHATSAPP_VERIFY_TOKEN`    | User-chosen webhook challenge secret                    |
 
 For a fork, create a D1 database and replace the `database_id` in `wrangler.jsonc`:
 
@@ -134,7 +136,7 @@ Before relying on the deployment, send a new message while `pnpm wrangler tail w
 
 - One allowlisted WhatsApp user
 - Meta test number rather than an onboarded production number
-- Nutrition inferred by the model when exact product data is unavailable
+- Nutrition falls back to a model estimate when Brave lacks usable serving data
 - No dashboard or data export yet
 - No automated token-health alert
 

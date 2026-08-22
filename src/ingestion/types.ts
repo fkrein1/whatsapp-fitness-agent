@@ -11,6 +11,7 @@ export const extractedMealItemSchema = z.object({
   carbsGrams: nullableNumber,
   fatGrams: nullableNumber,
   confidence: z.number().min(0).max(1),
+  nutritionSource: z.string().nullable(),
 });
 
 export const extractedExerciseSetSchema = z.object({

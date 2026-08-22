@@ -10,7 +10,8 @@ import {
 import type { AppBindings } from "../env";
 import { downloadWhatsAppMedia, markMessageRead, sendWhatsAppText } from "../whatsapp/client";
 import type { WhatsAppMessage } from "../whatsapp/types";
-import { extractFitnessData, transcribeAudio } from "./agent";
+import { formatNutritionResearch, searchNutrition } from "../nutrition/brave";
+import { extractFitnessData, planNutritionResearch, transcribeAudio } from "./agent";
 
 export async function processMessage(message: WhatsAppMessage, env: AppBindings) {
   const db = createDatabase(env.DB);
@@ -41,7 +42,8 @@ export async function processMessage(message: WhatsAppMessage, env: AppBindings)
   let reply: string;
   try {
     const input = await buildAgentInput(message, env);
-    const result = await extractFitnessData(input, receivedAt, env);
+    const nutritionResearch = await getNutritionResearch(input, receivedAt, message.id, env);
+    const result = await extractFitnessData(input, receivedAt, env, nutritionResearch);
     await saveIngestion(db, sourceMessageId, result, receivedAt);
     reply = await buildReply(result, db, receivedAt);
   } catch (error) {
@@ -61,6 +63,25 @@ export async function processMessage(message: WhatsAppMessage, env: AppBindings)
       messageId: message.id,
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+async function getNutritionResearch(
+  input: string | ResponseInput,
+  receivedAt: Date,
+  messageId: string,
+  env: AppBindings,
+) {
+  try {
+    const queries = await planNutritionResearch(input, receivedAt, env);
+    if (!queries.length) return null;
+    return formatNutritionResearch(await searchNutrition(queries, env));
+  } catch (error) {
+    console.warn("Nutrition research failed; using model estimate", {
+      messageId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   }
 }
 

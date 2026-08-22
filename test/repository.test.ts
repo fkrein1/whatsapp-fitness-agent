@@ -69,6 +69,7 @@ describe("fitness repository", () => {
                 carbsGrams: null,
                 fatGrams: null,
                 confidence: 0.8,
+                nutritionSource: "user_provided",
               },
             ],
             exerciseSets: [],
