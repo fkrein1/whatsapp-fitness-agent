@@ -35,10 +35,10 @@ For branded and restaurant foods, Luna asks Brave Search for Brazilian nutrition
 WhatsApp
   -> Meta Cloud API webhook
   -> Hono Worker with signature and sender checks
-  -> Cloudflare Think agent for durable, queued text turns and tool calls
+  -> Cloudflare Think agent for durable, queued multimodal turns and tool calls
   -> Cloudflare Workflow for retryable multi-workout imports
-  -> GPT-5.6 Luna for extraction and reasoning
-     or Cloudflare Whisper for voice-note transcription
+  -> Cloudflare Whisper for voice-note transcription
+  -> GPT-5.6 Luna for text, image understanding, reasoning, and tool selection
   -> Drizzle ORM and Cloudflare D1
   -> WhatsApp reply
 ```
@@ -47,7 +47,7 @@ Luna and Whisper run through the Worker's Cloudflare AI binding and AI Gateway w
 
 Think stores conversation and execution state in Durable Object SQLite. D1 remains the fitness system of record and separates source messages, fitness events, meal items, exercise sets, measurements, and an audit trail for corrections. Meta message IDs make retries idempotent.
 
-Text messages wait for 1.5 seconds of quiet before entering Think. A quick sequence of up to eight messages becomes one durable submission and one reply, so follow-up fragments and corrections are interpreted together. Each turn sees the current burst plus the previous four user turns and their replies; older reasoning and tool payloads are pruned while the structured fitness history stays available through D1 query tools.
+Text, photos, and transcribed voice notes wait for 1.5 seconds of quiet before entering Think. A quick sequence of up to eight messages becomes one durable submission and one reply, so a photo followed by a caption or correction is interpreted together. Each turn sees the current burst plus the previous four user turns and their replies. Recent tool results stay in context for follow-ups, while older payloads are pruned and the structured history remains available through D1 queries.
 
 Exercises live in a catalog with stable IDs and a separate alias table. Before recording a workout, the agent checks submitted names against that catalog. Known variants such as `RDL` and `Romanian Deadlift (RDL)` share one history. For an unknown movement, the agent either registers a new exercise or attaches the name as an alias when an existing match is clear. The original submitted name remains on each set.
 
@@ -61,7 +61,7 @@ Corrections update the selected event or child record and append its before/afte
 - Cloudflare Agents SDK, Think, and Durable Objects
 - Hono
 - Drizzle ORM and Drizzle Kit
-- GPT-5.6 Luna with strict structured output
+- GPT-5.6 Luna with vision and structured tool calls
 - Cloudflare Whisper Large v3 Turbo
 - Brave Search API for branded-food nutrition research
 - Zod
@@ -174,7 +174,6 @@ Worker logs emit the same `sourceMessageId` and stage. AI Gateway requests also 
 - Nutrition falls back to a model estimate when Brave lacks usable serving data
 - No dashboard or data export yet; analysis is available through WhatsApp tools
 - No automated token-health alert
-- Image and audio ingestion still use the bounded extraction path rather than Think tools
 
 ## Privacy
 

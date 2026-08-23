@@ -13,7 +13,6 @@ import {
   getDailyMeals,
   getExerciseCatalog,
   getLatestPendingMealProposal,
-  getRecentActiveMealsForSender,
   getRecentWeights,
   manageRecords,
   queryMeals,
@@ -142,37 +141,6 @@ describe("fitness repository", () => {
     );
     expect(await getRecentWeights(db, 7)).toEqual([
       expect.objectContaining({ value: 80, unit: "kg" }),
-    ]);
-  });
-
-  it("returns recent active meals with correction references for conversational follow-ups", async () => {
-    const db = createDatabase(env.DB);
-    const senderId = `sender-${crypto.randomUUID()}`;
-    const now = new Date();
-    const sourceMessageId = await claimSourceMessage(db, {
-      ...sourceMessage("recent-meal"),
-      senderId,
-      receivedAt: now,
-    });
-    await saveIngestion(
-      db,
-      sourceMessageId!,
-      { events: [mealEvent(now.toISOString(), "Recent yogurt", 90)], query: null, reply: "Saved." },
-      now,
-    );
-
-    const recent = await getRecentActiveMealsForSender(
-      db,
-      senderId,
-      new Date(now.getTime() + 5 * 60 * 1000),
-    );
-    expect(recent).toEqual([
-      expect.objectContaining({
-        ref: expect.any(String),
-        summary: "Recent yogurt",
-        totals: expect.objectContaining({ caloriesKcal: 90 }),
-        items: [expect.objectContaining({ ref: expect.any(String), name: "Recent yogurt" })],
-      }),
     ]);
   });
 

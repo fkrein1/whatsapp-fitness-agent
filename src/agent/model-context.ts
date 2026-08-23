@@ -19,7 +19,7 @@ export function recentConversationMessages(
   return pruneMessages({
     messages: messages.slice(startIndex),
     reasoning: "all",
-    toolCalls: "all",
+    toolCalls: "before-last-12-messages",
   });
 }
 

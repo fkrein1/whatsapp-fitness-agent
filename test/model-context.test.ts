@@ -17,7 +17,7 @@ describe("agent model context", () => {
     expect(recentConversationMessages(messages)).toEqual(messages.slice(2));
   });
 
-  it("removes old tool payloads while preserving nearby assistant text", () => {
+  it("keeps recent tool results so follow-up messages have continuity", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "what did I lift?" },
       {
@@ -46,11 +46,7 @@ describe("agent model context", () => {
       { role: "user", content: "and the week before?" },
     ];
 
-    expect(recentConversationMessages(messages)).toEqual([
-      { role: "user", content: "what did I lift?" },
-      { role: "assistant", content: "You trained bench press." },
-      { role: "user", content: "and the week before?" },
-    ]);
+    expect(recentConversationMessages(messages)).toEqual(messages);
   });
 
   it("can keep a multi-message burst plus four previous user turns", () => {

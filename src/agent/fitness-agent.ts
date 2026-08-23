@@ -20,8 +20,8 @@ import { createDatabase } from "../db/client";
 import {
   approveLatestMealProposal,
   cancelLatestMealProposal,
+  createMealProposal,
   getLatestPendingMealProposal,
-  getRecentActiveMealsForSender,
   getSourceMessageStatus,
   manageRecords,
   markSourceMessageFailed,
@@ -37,6 +37,7 @@ import {
   updateLatestMealProposal,
 } from "../db/repository";
 import type { IngestionResult } from "../ingestion/types";
+import { prepareWhatsAppParts } from "../ingestion/media";
 import { searchNutrition } from "../nutrition/brave";
 import { sendWhatsAppText } from "../whatsapp/client";
 import {
@@ -45,6 +46,7 @@ import {
   mealQuerySchema,
   measurementQuerySchema,
   pendingMealActionSchema,
+  proposeMealInputSchema,
   timelineQuerySchema,
   trainingQuerySchema,
 } from "./fitness-tool-schemas";
@@ -54,19 +56,11 @@ import {
   jsonSafeToolOutput,
   recentConversationMessages,
 } from "./model-context";
-
-const whatsappTurnSchema = z.object({
-  sourceMessageId: z.string().uuid(),
-  providerMessageId: z.string().min(1),
-  senderId: z.string().min(1),
-  text: z.string().min(1),
-  receivedAt: z.string().datetime(),
-});
-
-type WhatsAppTurn = z.infer<typeof whatsappTurnSchema>;
+import { whatsappInputTypeSchema, whatsappTurnSchema, type WhatsAppTurn } from "./whatsapp-turn";
 
 const CORE_TOOL_NAMES = [
   "log_events",
+  "propose_meal",
   "research_nutrition",
   "query_meals",
   "query_training",
@@ -75,9 +69,14 @@ const CORE_TOOL_NAMES = [
   "manage_records",
 ];
 
-const whatsappTurnMetadataSchema = whatsappTurnSchema.omit({ text: true }).extend({
+const whatsappTurnMetadataSchema = z.object({
+  sourceMessageId: z.string().uuid(),
+  providerMessageId: z.string().min(1),
   sourceMessageIds: z.array(z.string().uuid()).min(1).max(8),
   providerMessageIds: z.array(z.string().min(1)).min(1).max(8),
+  inputTypes: z.array(whatsappInputTypeSchema).min(1).max(8),
+  senderId: z.string().min(1),
+  receivedAt: z.string().datetime(),
   channel: z.literal("whatsapp"),
 });
 
@@ -89,6 +88,7 @@ type PendingBurstRow = {
   sender_id: string;
   text: string;
   received_at: string;
+  payload_json: string | null;
 };
 
 const WHATSAPP_BURST_QUIET_SECONDS = 1.5;
@@ -98,7 +98,7 @@ export class FitnessAgent extends Think<Env> {
   workspaceBash = false;
   includeMcpTools = false;
   sendReasoning = false;
-  maxSteps = 12;
+  maxSteps = 8;
   chatStreamStallTimeoutMs = 60_000;
   chatRecovery = {
     maxAttempts: 5,
@@ -116,21 +116,19 @@ export class FitnessAgent extends Think<Env> {
   }
 
   getSystemPrompt() {
-    return `Você é o parceiro de treino e alimentação do Felipe. Converse de forma natural e curta, como no WhatsApp.
+    return `Você é o parceiro de treino e alimentação do Felipe. Converse em português brasileiro, de forma natural e curta, como no WhatsApp. Felipe nasceu em 11 de janeiro de 1989 e é homem.
 
-Felipe nasceu em 11 de janeiro de 1989 e é homem.
+Felipe mede 1,80 m e tem bastante massa muscular. Como referência pessoal, aos 90 kg ele estima estar perto de 15% de gordura corporal. Isso é uma estimativa, não uma medição; não extrapole automaticamente para outros pesos.
 
-O banco é o diário. Consulte-o quando a resposta depender do histórico. Registre, corrija ou remova dados quando Felipe pedir. Interprete datas no fuso America/Sao_Paulo e use quilogramas por padrão.
+O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. Registre pedidos claros sem pedir confirmação. Para corrigir ou remover algo existente, consulte quando precisar da referência e use manage_records. Nunca crie compensações, estornos ou nutrientes negativos.
 
-Correções alteram o estado atual: nunca crie refeições de ajuste, estorno ou compensação, nem use nutrientes negativos. Para corrigir data, quantidade, item ou duplicidade, consulte o registro e use manage_records. log_events serve apenas para fatos novos que realmente aconteceram.
+Entenda mensagens enviadas em sequência como uma fala só. Datas usam America/Sao_Paulo e pesos de treino usam quilogramas por padrão. Pergunte apenas quando mais de uma interpretação mudaria o registro.
 
-Escolha consultas compactas normalmente. Use a visão completa quando ele pedir detalhes, itens, séries ou fontes. Para comparações, consulte os períodos necessários e deixe as ferramentas calcularem totais e tendências.
+Em foto de comida sem pedido para registrar, use propose_meal para guardar a leitura como rascunho. Mostre os componentes e apenas o total de calorias, carboidratos, gorduras e proteína. Não peça confirmação. Se Felipe mandar uma instrução clara para adicionar, salve sem perguntar de novo.
 
-Ao relatar alimentação, use somente os registros ativos retornados por query_meals. Os totais devem bater com a soma das refeições mostradas; não apresente lançamentos de correção como comida. Quando complete for false, descreva o nutriente como parcial, não como total do período.
+Use research_nutrition quando calorias ou macros dependerem de marca, rótulo, restaurante ou produto que você não conhece com segurança. Em comida caseira ou porção visual, estime e diga que é estimativa.
 
-Trate mensagens enviadas em sequência como uma única fala. A intenção mais recente pode completar ou corrigir as anteriores. Aja quando o pedido estiver claro. Pergunte somente quando mais de uma interpretação mudaria o registro.
-
-Responda em português brasileiro, salvo pedido contrário. Seja próximo e neutro sobre alimentação, peso e treinos. Identifique estimativas. Mantenha referências internas fora da resposta e não faça diagnóstico médico.`;
+Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, séries, fontes ou detalhes. Ao relatar alimentação, use os registros ativos de query_meals e respeite o campo complete. Seja neutro sobre comida, peso e treino. Não mostre referências internas nem faça diagnóstico médico.`;
   }
 
   async beforeTurn(context: TurnContext): Promise<TurnConfig> {
@@ -138,7 +136,6 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
     const db = createDatabase(this.env.DB);
     let pendingMealContext = "";
     let hasPendingMeal = false;
-    let recentMealContext = "";
     const currentBurstSize = turn?.sourceMessageIds.length ?? 1;
     const modelMessages = recentConversationMessages(
       context.messages,
@@ -154,31 +151,25 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
         transport: "responses",
       });
       const turnReceivedAt = new Date(turn.receivedAt);
-      const [pendingMeal, recentMeals] = await Promise.all([
-        getLatestPendingMealProposal(db, turn.senderId, turnReceivedAt),
-        getRecentActiveMealsForSender(db, turn.senderId, turnReceivedAt),
-      ]);
+      const pendingMeal = await getLatestPendingMealProposal(db, turn.senderId, turnReceivedAt);
       if (pendingMeal) {
         hasPendingMeal = true;
         pendingMealContext = `\n\nHá uma refeição pendente. Use resolve_pending_meal para salvar, editar ou descartar conforme o pedido atual. Um pedido claro como "adiciona" salva de imediato. Preserve os itens que Felipe não corrigiu.\n${JSON.stringify(pendingMeal.payload.events)}`;
-      }
-      if (recentMeals.length) {
-        recentMealContext = `\n\nEstado recente do diário (registros ativos; use em referências como "agora", "hoje", "esse" ou correções):\n${JSON.stringify(recentMeals)}`;
       }
     }
     const trustedContext = turn
       ? `\n\nContexto confiável da requisição:\nEsta rodada contém ${turn.sourceMessageIds.length} mensagem(ns) nova(s) recebida(s) em sequência. A mais recente chegou em ${turn.receivedAt}. Interprete datas relativas no fuso America/Sao_Paulo.`
       : "";
     return {
-      instructions: `${this.getSystemPrompt()}${trustedContext}${pendingMealContext}${recentMealContext}`,
+      instructions: `${this.getSystemPrompt()}${trustedContext}${pendingMealContext}`,
       messages: modelMessages,
       maxOutputTokens: 1500,
       maxRetries: 1,
-      maxSteps: 12,
+      maxSteps: 8,
       activeTools: hasPendingMeal ? [...CORE_TOOL_NAMES, "resolve_pending_meal"] : CORE_TOOL_NAMES,
       providerOptions: {
         openai: {
-          reasoningEffort: "high",
+          reasoningEffort: "medium",
           store: false,
         },
       },
@@ -241,7 +232,7 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
     return {
       log_events: tool({
         description:
-          "Create new real-world meals, workouts, runs, measurements, or notes from the current WhatsApp turn. Never use this tool for corrections, duplicates, offsets, estornos, or balancing entries; query and use manage_records instead. Nutrients cannot be negative. Exercise aliases are normalized automatically. Research branded nutrition first unless the label values came from the user or image.",
+          "Registra fatos novos do turno atual: refeições, treinos, corridas, medidas ou notas. Não use para corrigir ou apagar registros existentes.",
         inputSchema: logEventsInputSchema,
         execute: async ({ events }) => {
           const turn = this.requireWhatsAppTurnMetadata();
@@ -270,9 +261,33 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
           };
         },
       }),
+      propose_meal: tool({
+        description:
+          "Guarda como rascunho uma refeição identificada em foto quando Felipe ainda não pediu para registrar. Uma nova proposta substitui a anterior.",
+        inputSchema: proposeMealInputSchema,
+        execute: async ({ events: inputEvents }) => {
+          const turn = this.requireWhatsAppTurnMetadata();
+          const events = inputEvents.map(normalizeLogEvent);
+          const imageIndex = turn.inputTypes.lastIndexOf("image");
+          const proposalSourceMessageId = turn.sourceMessageIds[imageIndex] ?? turn.sourceMessageId;
+          const payload: IngestionResult = {
+            events,
+            query: null,
+            reply: "Leitura da foto guardada como rascunho.",
+          };
+          await createMealProposal(
+            createDatabase(this.env.DB),
+            proposalSourceMessageId,
+            turn.senderId,
+            payload,
+          );
+          await this.markTurnProcessed(turn, { except: proposalSourceMessageId });
+          return { proposed: true, events };
+        },
+      }),
       research_nutrition: tool({
         description:
-          "Research calories and macros for branded, packaged, restaurant, or menu foods in Brazil before logging them. Skip this when Felipe supplied label values. Prefer queries containing product, serving size, and informação nutricional.",
+          "Pesquisa calorias e macros quando marca, rótulo, restaurante ou produto não são conhecidos com segurança. Não use se Felipe ou a foto do rótulo já forneceram os valores.",
         inputSchema: z.object({
           queries: z
             .array(z.string().min(1))
@@ -284,35 +299,35 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
       }),
       query_meals: tool({
         description:
-          "Query the current active meal state over any inclusive date range; deleted records and correction history are omitted. Compact returns meal names, foods, per-meal calories, daily totals, and averages. Full adds portions, macros, confidence, nutrition sources, and record references for corrections.",
+          "Consulta refeições ativas em qualquer período. compact traz refeições e totais; full acrescenta porções, macros, fontes e referências para correção.",
         inputSchema: mealQuerySchema,
         execute: async (input) =>
           jsonSafeToolOutput(await queryMeals(createDatabase(this.env.DB), input)),
       }),
       query_training: tool({
         description:
-          "Query workouts, runs, exercise history, progression, volume, best weights, distance, and duration over any inclusive date range. Compact summarizes sessions and exercises. Full returns every set and record references for corrections.",
+          "Consulta treinos, corridas, progressão, volume, cargas, distância e duração. full traz cada série e referências para correção.",
         inputSchema: trainingQuerySchema,
         execute: async (input) =>
           jsonSafeToolOutput(await queryTraining(createDatabase(this.env.DB), input)),
       }),
       query_measurements: tool({
         description:
-          "Query weight, body fat, waist, or other body measurements over any inclusive date range. Compact returns first, latest, and change. Full returns every measurement and references for corrections.",
+          "Consulta peso e outras medidas corporais. compact traz primeira, última e variação; full traz cada medida e suas referências.",
         inputSchema: measurementQuerySchema,
         execute: async (input) =>
           jsonSafeToolOutput(await queryMeasurements(createDatabase(this.env.DB), input)),
       }),
       query_timeline: tool({
         description:
-          "Query the mixed health diary over any inclusive date range. Use when the user asks what was logged, what happened on a date, or for several record types together. Returns chronological records and references.",
+          "Consulta vários tipos do diário em ordem cronológica. Use para saber o que foi registrado ou o que aconteceu em uma data.",
         inputSchema: timelineQuerySchema,
         execute: async (input) =>
           jsonSafeToolOutput(await queryTimeline(createDatabase(this.env.DB), input)),
       }),
       manage_records: tool({
         description:
-          "Correct or soft-delete current records that Felipe explicitly identified. Use this instead of log_events whenever he says a record is wrong, duplicated, happened today/now, or refers to something just saved. Query first to obtain exact references unless trusted recent-state context already contains them. Apply a clear correction directly. When several records could match, query and ask one short question instead of guessing.",
+          "Corrige ou remove registros existentes por referência. Consulte primeiro se a conversa recente não trouxer a referência exata; não adivinhe entre vários candidatos.",
         inputSchema: manageRecordsInputSchema,
         execute: async (input) => {
           const turn = this.requireWhatsAppTurnMetadata();
@@ -321,7 +336,7 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
       }),
       resolve_pending_meal: tool({
         description:
-          "Resolve the currently pending meal photo. Save on a clear instruction such as adiciona, edit only the fields Felipe corrected, or discard when he asks. Do not request another confirmation after a clear save instruction.",
+          "Salva, edita ou descarta a refeição pendente. Uma instrução clara como 'adiciona' deve salvar sem nova confirmação.",
         inputSchema: pendingMealActionSchema,
         execute: async (input) => {
           const turn = this.requireWhatsAppTurnMetadata();
@@ -400,9 +415,14 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
         sender_id TEXT NOT NULL,
         text TEXT NOT NULL,
         received_at TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        payload_json TEXT
       )
     `;
+    const columns = this.sql<{ name: string }>`PRAGMA table_info(cf_whatsapp_burst_messages)`;
+    if (!columns.some((column) => column.name === "payload_json")) {
+      void this.sql`ALTER TABLE cf_whatsapp_burst_messages ADD COLUMN payload_json TEXT`;
+    }
     void this.sql`
       CREATE TABLE IF NOT EXISTS cf_whatsapp_burst_state (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -415,10 +435,11 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
     this.ensureWhatsAppBurstStorage();
     void this.sql`
       INSERT OR IGNORE INTO cf_whatsapp_burst_messages (
-        provider_message_id, source_message_id, sender_id, text, received_at, created_at
+        provider_message_id, source_message_id, sender_id, text, received_at, created_at,
+        payload_json
       ) VALUES (
         ${input.providerMessageId}, ${input.sourceMessageId}, ${input.senderId},
-        ${input.text}, ${input.receivedAt}, ${Date.now()}
+        ${input.text ?? ""}, ${input.receivedAt}, ${Date.now()}, ${JSON.stringify(input)}
       )
     `;
     const generation = crypto.randomUUID();
@@ -450,12 +471,29 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
     if (!state || state.generation !== parsed.data.generation) return;
 
     const rows = this.sql<PendingBurstRow>`
-      SELECT source_message_id, provider_message_id, sender_id, text, received_at
+      SELECT source_message_id, provider_message_id, sender_id, text, received_at, payload_json
       FROM cf_whatsapp_burst_messages
       ORDER BY received_at ASC, created_at ASC
       LIMIT ${WHATSAPP_BURST_LIMIT}
     `;
     if (!rows.length) return;
+
+    const turns = rows.map((row) =>
+      whatsappTurnSchema.parse(
+        row.payload_json
+          ? JSON.parse(row.payload_json)
+          : {
+              sourceMessageId: row.source_message_id,
+              providerMessageId: row.provider_message_id,
+              senderId: row.sender_id,
+              inputType: "text",
+              text: row.text,
+              mediaId: null,
+              mimeType: null,
+              receivedAt: row.received_at,
+            },
+      ),
+    );
 
     const latest = rows.at(-1)!;
     const metadata: WhatsAppTurnMetadata = {
@@ -463,21 +501,49 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
       providerMessageId: latest.provider_message_id,
       sourceMessageIds: rows.map((row) => row.source_message_id),
       providerMessageIds: rows.map((row) => row.provider_message_id),
+      inputTypes: turns.map((turn) => turn.inputType),
       senderId: latest.sender_id,
       receivedAt: latest.received_at,
       channel: "whatsapp",
     };
-    const messages: UIMessage[] = rows.map((row) => ({
-      id: row.provider_message_id,
-      role: "user",
-      parts: [{ type: "text", text: row.text }],
-      metadata: { turnMetadata: metadata },
-    }));
+
+    let messages: UIMessage[];
+    try {
+      messages = await Promise.all(
+        turns.map(async (turn) => ({
+          id: turn.providerMessageId,
+          role: "user" as const,
+          parts: await prepareWhatsAppPartsWithRetry(turn, this.env),
+          metadata: { turnMetadata: metadata },
+        })),
+      );
+      await this.observeTurnFor(metadata, "input_prepared", {
+        inputTypes: metadata.inputTypes,
+      });
+    } catch (error) {
+      await this.handleWhatsAppTurnFailure(metadata, error);
+      this.removeBufferedRows(rows, parsed.data.generation);
+      await this.scheduleRemainingBurst();
+      return;
+    }
+
     const submission = await this.submitMessages(messages, {
-      idempotencyKey: `whatsapp-burst:${parsed.data.generation}`,
+      idempotencyKey: `whatsapp-burst:${metadata.providerMessageIds.join(":")}`,
       metadata,
     });
 
+    this.removeBufferedRows(rows, parsed.data.generation);
+    await this.observeTurnFor(metadata, "burst_submitted", {
+      burstSize: rows.length,
+      submissionId: submission.submissionId,
+      accepted: submission.accepted,
+      status: submission.status,
+    });
+
+    await this.scheduleRemainingBurst();
+  }
+
+  private removeBufferedRows(rows: PendingBurstRow[], generation: string) {
     for (const row of rows) {
       void this.sql`
         DELETE FROM cf_whatsapp_burst_messages
@@ -486,34 +552,28 @@ Responda em português brasileiro, salvo pedido contrário. Seja próximo e neut
     }
     void this.sql`
       DELETE FROM cf_whatsapp_burst_state
-      WHERE singleton = 1 AND generation = ${parsed.data.generation}
+      WHERE singleton = 1 AND generation = ${generation}
     `;
-    await this.observeTurnFor(metadata, "burst_submitted", {
-      burstSize: rows.length,
-      submissionId: submission.submissionId,
-      accepted: submission.accepted,
-      status: submission.status,
-    });
+  }
 
+  private async scheduleRemainingBurst() {
     const remaining = this.sql<{ count: number }>`
       SELECT COUNT(*) AS count FROM cf_whatsapp_burst_messages
     `[0]?.count;
-    if (remaining) {
-      const generation = crypto.randomUUID();
-      void this.sql`
-        INSERT INTO cf_whatsapp_burst_state (singleton, generation)
-        VALUES (1, ${generation})
-        ON CONFLICT(singleton) DO UPDATE SET generation = excluded.generation
-      `;
-      await this.schedule(
-        WHATSAPP_BURST_QUIET_SECONDS,
-        "flushWhatsAppBurst",
-        { generation },
-        {
-          retry: { maxAttempts: 3 },
-        },
-      );
-    }
+    if (!remaining) return;
+
+    const generation = crypto.randomUUID();
+    void this.sql`
+      INSERT INTO cf_whatsapp_burst_state (singleton, generation)
+      VALUES (1, ${generation})
+      ON CONFLICT(singleton) DO UPDATE SET generation = excluded.generation
+    `;
+    await this.schedule(
+      WHATSAPP_BURST_QUIET_SECONDS,
+      "flushWhatsAppBurst",
+      { generation },
+      { retry: { maxAttempts: 3 } },
+    );
   }
 
   async onChatResponse(result: ChatResponseResult) {
@@ -717,6 +777,20 @@ function normalizeLogEvent(
     };
   }
   return base;
+}
+
+async function prepareWhatsAppPartsWithRetry(turn: WhatsAppTurn, env: Env) {
+  const delays = [0, 250, 750];
+  let lastError: unknown;
+  for (const delayMs of delays) {
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    try {
+      return await prepareWhatsAppParts(turn, env);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 function getErrorMessage(error: unknown) {

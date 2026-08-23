@@ -19,7 +19,7 @@ Read both only when setup encounters one of those failures.
 - Keep credentials out of output. Use `.env` locally and Worker secrets after deployment.
 - Restrict replies to `WHATSAPP_RECIPIENT`; this is a single-user test agent.
 - Use the configured Graph API version rather than copying a version from this skill.
-- Route `openai/gpt-5.6-luna` with high reasoning through the Worker's `AI` binding and Unified Billing. The Worker needs no OpenAI key.
+- Route `openai/gpt-5.6-luna` with medium reasoning through the Worker's `AI` binding and Unified Billing. The Worker needs no OpenAI key.
 - Get approval before publishing the Meta app or making another material external change unless the request already authorizes the full live-message setup.
 
 ## Completion gate

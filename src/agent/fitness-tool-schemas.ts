@@ -56,6 +56,13 @@ const mealEventSchema = z.object({
   items: z.array(extractedMealItemSchema).min(1).describe("Foods or drinks in this meal."),
 });
 
+export const proposeMealInputSchema = z.object({
+  events: z
+    .array(mealEventSchema)
+    .min(1)
+    .describe("Refeições identificadas na foto que devem ficar disponíveis para salvar depois."),
+});
+
 const workoutEventSchema = z.object({
   kind: z.literal("workout"),
   ...eventBase,
