@@ -64,6 +64,13 @@
       "when": 1787436241171,
       "tag": "0008_prevent_negative_nutrition",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1787450609984,
+      "tag": "0009_tough_gladiator",
+      "breakpoints": true
     }
   ]
 }

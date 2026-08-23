@@ -255,6 +255,21 @@ export const pendingMealActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("discard") }),
 ]);
 
+export const updateSoulInputSchema = z.object({
+  content: z
+    .string()
+    .min(40)
+    .max(12_000)
+    .describe(
+      "The complete replacement Soul document in Markdown. Preserve every unchanged fact and preference from the current Soul.",
+    ),
+  reason: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe("Concise explanation of what the person asked to add, change, or forget."),
+});
+
 export type QueryOptions = z.infer<typeof queryOptionsSchema>;
 export type MealQuery = z.infer<typeof mealQuerySchema>;
 export type TrainingQuery = z.infer<typeof trainingQuerySchema>;

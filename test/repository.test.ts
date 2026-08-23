@@ -13,6 +13,7 @@ import {
   getDailyMeals,
   getExerciseCatalog,
   getLatestPendingMealProposal,
+  getSoul,
   getRecentWeights,
   manageRecords,
   queryMeals,
@@ -24,8 +25,15 @@ import {
   resolveExerciseNames,
   saveIngestion,
   updateLatestMealProposal,
+  updateSoul,
 } from "../src/db/repository";
-import { exerciseSets, fitnessEvents, mealItems, recordChanges } from "../src/db/schema";
+import {
+  agentSoulChanges,
+  exerciseSets,
+  fitnessEvents,
+  mealItems,
+  recordChanges,
+} from "../src/db/schema";
 
 describe("fitness repository", () => {
   it("claims a WhatsApp message only once", async () => {
@@ -68,6 +76,41 @@ describe("fitness repository", () => {
         createdAt: expect.any(Date),
       }),
     ]);
+  });
+
+  it("creates, updates, and audits a sender's live Soul", async () => {
+    const db = createDatabase(env.DB);
+    const senderId = `sender-${crypto.randomUUID()}`;
+    const sourceMessageId = await claimSourceMessage(db, {
+      providerMessageId: `wamid.${crypto.randomUUID()}`,
+      senderId,
+      inputType: "text",
+      text: "Remember that my goal is a half marathon",
+      mediaId: null,
+      mimeType: null,
+      receivedAt: new Date(),
+    });
+
+    expect(await getSoul(db, senderId)).toBeNull();
+    expect(
+      await updateSoul(
+        db,
+        senderId,
+        sourceMessageId!,
+        "# Soul\n\n## Person and goals\n\nThe person wants to complete a half marathon.",
+        "Created from onboarding",
+      ),
+    ).toEqual({ changed: true, revision: 1 });
+    expect(await getSoul(db, senderId)).toEqual({
+      content: "# Soul\n\n## Person and goals\n\nThe person wants to complete a half marathon.",
+      revision: 1,
+    });
+    expect(
+      await db
+        .select({ revision: agentSoulChanges.revision, reason: agentSoulChanges.reason })
+        .from(agentSoulChanges)
+        .where(eq(agentSoulChanges.senderId, senderId)),
+    ).toEqual([{ revision: 1, reason: "Created from onboarding" }]);
   });
 
   it("stores queryable meals and weekly weight", async () => {

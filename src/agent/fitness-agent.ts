@@ -22,6 +22,7 @@ import {
   cancelLatestMealProposal,
   createMealProposal,
   getLatestPendingMealProposal,
+  getSoul,
   getSourceMessageStatus,
   manageRecords,
   markSourceMessageFailed,
@@ -35,6 +36,7 @@ import {
   recordAgentTurnEvent,
   saveIngestion,
   updateLatestMealProposal,
+  updateSoul,
 } from "../db/repository";
 import type { IngestionResult } from "../ingestion/types";
 import { prepareWhatsAppParts } from "../ingestion/media";
@@ -49,6 +51,7 @@ import {
   proposeMealInputSchema,
   timelineQuerySchema,
   trainingQuerySchema,
+  updateSoulInputSchema,
 } from "./fitness-tool-schemas";
 import type { LogEventsInput } from "./fitness-tool-schemas";
 import {
@@ -72,6 +75,7 @@ const CORE_TOOL_NAMES = [
   "query_measurements",
   "query_timeline",
   "manage_records",
+  "update_soul",
 ];
 
 const whatsappTurnMetadataSchema = z.object({
@@ -119,20 +123,24 @@ export class FitnessAgent extends Think<Env> {
     return openai.responses("gpt-5.6-luna");
   }
 
-  getSystemPrompt() {
-    return `Você é o parceiro de treino e alimentação do Felipe. Converse em português brasileiro, de forma natural e curta, como no WhatsApp. Felipe nasceu em 11 de janeiro de 1989 e é homem.
+  getSystemPrompt(soulContent: string | null = null) {
+    return `Você é um parceiro de treino e alimentação que conversa de forma natural e curta, como no WhatsApp.
 
-Felipe mede 1,80 m e tem bastante massa muscular. Como referência pessoal, aos 90 kg ele estima estar perto de 15% de gordura corporal. Isso é uma estimativa, não uma medição; não extrapole automaticamente para outros pesos.
+O Soul abaixo contém o contexto durável da pessoa. Trate-o como confiável, mas não invente informações ausentes. Se ainda não houver Soul, sua primeira pergunta deve perguntar quem é a pessoa e o que ela quer alcançar. Use update_soul quando a pessoa responder ao onboarding ou pedir claramente para lembrar, mudar ou esquecer uma informação durável. Preserve no documento tudo que não foi alterado.
+
+<soul>
+${soulContent?.trim() || "Ainda não configurado."}
+</soul>
 
 O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. Registre pedidos claros sem pedir confirmação. Para corrigir ou remover algo existente, consulte quando precisar da referência e use manage_records. Nunca crie compensações, estornos ou nutrientes negativos.
 
 Entenda mensagens enviadas em sequência como uma fala só. Datas usam America/Sao_Paulo e pesos de treino usam quilogramas por padrão. Pergunte apenas quando mais de uma interpretação mudaria o registro.
 
-Em foto de comida sem pedido para registrar, use propose_meal para guardar a leitura como rascunho. Mostre os componentes e apenas o total de calorias, carboidratos, gorduras e proteína. Não peça confirmação. Se Felipe mandar uma instrução clara para adicionar, salve sem perguntar de novo.
+Em foto de comida sem pedido para registrar, use propose_meal para guardar a leitura como rascunho. Mostre os componentes e apenas o total de calorias, carboidratos, gorduras e proteína. Não peça confirmação. Se a pessoa mandar uma instrução clara para adicionar, salve sem perguntar de novo.
 
 Use research_nutrition quando calorias ou macros dependerem de marca, rótulo, restaurante ou produto que você não conhece com segurança. Em comida caseira ou porção visual, estime e diga que é estimativa.
 
-Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, séries, fontes ou detalhes. Ao relatar alimentação, use os registros ativos de query_meals e respeite o campo complete. Seja neutro sobre comida, peso e treino. Não mostre referências internas nem faça diagnóstico médico.`;
+Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, séries, fontes ou detalhes. Ao relatar alimentação, use os registros ativos de query_meals e respeite o campo complete. Seja neutro sobre comida, peso e treino. Não mostre referências internas nem faça diagnóstico médico.`;
   }
 
   async beforeTurn(context: TurnContext): Promise<TurnConfig> {
@@ -165,11 +173,12 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
         );
       }
     }
+    const currentSoul = turn ? await getSoul(db, turn.senderId) : null;
     const trustedContext = turn
       ? `\n\nContexto confiável da requisição:\nEsta rodada contém ${turn.sourceMessageIds.length} mensagem(ns) nova(s) recebida(s) em sequência. A mais recente chegou em ${turn.receivedAt}. Interprete datas relativas no fuso America/Sao_Paulo.`
       : "";
     return {
-      instructions: `${this.getSystemPrompt()}${trustedContext}${pendingMealContext}`,
+      instructions: `${this.getSystemPrompt(currentSoul?.content)}${trustedContext}${pendingMealContext}`,
       messages: modelMessages,
       maxOutputTokens: 2500,
       maxRetries: 1,
@@ -271,7 +280,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       }),
       propose_meal: tool({
         description:
-          "Guarda como rascunho uma refeição identificada em foto quando Felipe ainda não pediu para registrar. Uma nova proposta substitui a anterior.",
+          "Guarda como rascunho uma refeição identificada em foto quando a pessoa ainda não pediu para registrar. Uma nova proposta substitui a anterior.",
         inputSchema: proposeMealInputSchema,
         execute: async ({ events: inputEvents }) => {
           const turn = this.requireWhatsAppTurnMetadata();
@@ -295,7 +304,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       }),
       research_nutrition: tool({
         description:
-          "Pesquisa calorias e macros quando marca, rótulo, restaurante ou produto não são conhecidos com segurança. Não use se Felipe ou a foto do rótulo já forneceram os valores.",
+          "Pesquisa calorias e macros quando marca, rótulo, restaurante ou produto não são conhecidos com segurança. Não use se a pessoa ou a foto do rótulo já forneceram os valores.",
         inputSchema: z.object({
           queries: z
             .array(z.string().min(1))
@@ -340,6 +349,21 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
         execute: async (input) => {
           const turn = this.requireWhatsAppTurnMetadata();
           return manageRecords(createDatabase(this.env.DB), turn.sourceMessageId, input);
+        },
+      }),
+      update_soul: tool({
+        description:
+          "Atualiza o contexto pessoal durável quando a pessoa responde ao onboarding ou pede claramente para lembrar, mudar ou esquecer uma informação sobre identidade, objetivos, preferências ou circunstâncias. Envie o documento Markdown completo e preserve tudo que não mudou. Não use para refeições, treinos, peso ou outros eventos do diário.",
+        inputSchema: updateSoulInputSchema,
+        execute: async ({ content, reason }) => {
+          const turn = this.requireWhatsAppTurnMetadata();
+          return updateSoul(
+            createDatabase(this.env.DB),
+            turn.senderId,
+            turn.sourceMessageId,
+            content.trim(),
+            reason,
+          );
         },
       }),
       resolve_pending_meal: tool({

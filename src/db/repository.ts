@@ -11,6 +11,8 @@ import { cleanExerciseName, normalizeExerciseKey } from "../exercises/normalize"
 import type { IngestionResult } from "../ingestion/types";
 import type { Database } from "./client";
 import {
+  agentSoulChanges,
+  agentSouls,
   agentTurnEvents,
   exerciseAliases,
   exercises,
@@ -25,6 +27,72 @@ import {
 import type { MessageInputType } from "./schema";
 
 const D1_CHILD_INSERT_CHUNK_SIZE = 10;
+
+export async function getSoul(db: Database, senderId: string) {
+  const [current] = await db
+    .select({ content: agentSouls.content, revision: agentSouls.revision })
+    .from(agentSouls)
+    .where(eq(agentSouls.senderId, senderId))
+    .limit(1);
+  return current ?? null;
+}
+
+export async function updateSoul(
+  db: Database,
+  senderId: string,
+  sourceMessageId: string,
+  content: string,
+  reason: string,
+) {
+  const [current] = await db
+    .select({ content: agentSouls.content, revision: agentSouls.revision })
+    .from(agentSouls)
+    .where(eq(agentSouls.senderId, senderId))
+    .limit(1);
+  const now = new Date();
+  if (!current) {
+    await db.batch([
+      db.insert(agentSouls).values({
+        senderId,
+        content,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      db.insert(agentSoulChanges).values({
+        id: crypto.randomUUID(),
+        senderId,
+        sourceMessageId,
+        revision: 1,
+        before: "",
+        after: content,
+        reason,
+        createdAt: now,
+      }),
+    ]);
+    return { changed: true, revision: 1 };
+  }
+  if (current.content === content) return { changed: false, revision: current.revision };
+
+  const revision = current.revision + 1;
+  await db.batch([
+    db.insert(agentSoulChanges).values({
+      id: crypto.randomUUID(),
+      senderId,
+      sourceMessageId,
+      revision,
+      before: current.content,
+      after: content,
+      reason,
+      createdAt: now,
+    }),
+    db
+      .update(agentSouls)
+      .set({ content, revision, updatedAt: now })
+      .where(and(eq(agentSouls.senderId, senderId), eq(agentSouls.revision, current.revision))),
+  ]);
+  return { changed: true, revision };
+}
 
 function chunksOf<T>(values: T[]) {
   const chunks: T[][] = [];

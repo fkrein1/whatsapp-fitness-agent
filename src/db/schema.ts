@@ -47,6 +47,34 @@ export const agentTurnEvents = sqliteTable(
   ],
 );
 
+export const agentSouls = sqliteTable("agent_souls", {
+  senderId: text("sender_id").primaryKey(),
+  content: text("content").notNull(),
+  revision: integer("revision").notNull().default(1),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export const agentSoulChanges = sqliteTable(
+  "agent_soul_changes",
+  {
+    id: text("id").primaryKey(),
+    senderId: text("sender_id").notNull(),
+    sourceMessageId: text("source_message_id")
+      .notNull()
+      .references(() => sourceMessages.id, { onDelete: "cascade" }),
+    revision: integer("revision").notNull(),
+    before: text("before").notNull(),
+    after: text("after").notNull(),
+    reason: text("reason").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("agent_soul_changes_sender_revision_idx").on(table.senderId, table.revision),
+    index("agent_soul_changes_source_message_id_idx").on(table.sourceMessageId),
+  ],
+);
+
 export const mealProposals = sqliteTable(
   "meal_proposals",
   {
