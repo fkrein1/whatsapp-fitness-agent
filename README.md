@@ -4,14 +4,18 @@ A single-user fitness log that lives in WhatsApp. Send a workout, run, meal phot
 
 The deployed version uses a Meta WhatsApp test number. Only the number configured as `WHATSAPP_RECIPIENT` can use it.
 
+## Demo
+
+See meal and run logging, voice-note support, calorie estimates, profile memory, and weekly training history in one continuous WhatsApp conversation.
+
+[Watch the 38-second demo](demo/fitness-agent-demo.mp4)
+
 ## Personalize the agent
 
 The agent keeps its durable knowledge about the person in D1. With no Soul configured, its first
 question asks who the person is and what they want to achieve. The `update_soul` tool creates and
 updates the Markdown document when the person answers onboarding or explicitly asks the agent to
 remember, change, or forget durable context. Every version is recorded in `agent_soul_changes`.
-
-<img width="350" alt="meal" src="https://github.com/user-attachments/assets/39e0ae48-a06d-4679-b3d3-615bccbb7d56" />
 
 ## What it records
 

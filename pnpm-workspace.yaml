@@ -1,3 +1,6 @@
+packages:
+  - video
+
 allowBuilds:
   esbuild: true
   workerd: true
