@@ -1,6 +1,6 @@
 # WhatsApp fitness agent
 
-A single-user fitness log that lives in WhatsApp. Send a workout, run, meal photo, voice note, or body-weight update. The agent extracts structured records, stores them in Cloudflare D1, and answers questions about recent activity.
+A single-user fitness log that lives in WhatsApp. Send a workout, run, meal photo, voice note, or body-weight update. The agent extracts structured data, stores confirmed records in Cloudflare D1, and answers questions about recent activity.
 
 The deployed version uses a Meta WhatsApp test number. Only the number configured as `WHATSAPP_RECIPIENT` can use it.
 
@@ -23,6 +23,7 @@ remember, change, or forget durable context. Every version is recorded in `agent
 - Runs with distance and duration
 - Meals with calories, macros, confidence, and a source URL when Brave finds supporting nutrition data
 - Body measurements such as weekly weight
+- Notes that do not fit the other record types
 - Original WhatsApp message and media metadata for provenance and deduplication
 
 Example messages:
@@ -42,6 +43,8 @@ Delete the duplicate workout from Thursday
 
 For branded and restaurant foods, Luna asks Brave Search for Brazilian nutrition sources and prefers official manufacturer or restaurant results. Explicit label values come from the user, and model estimates remain the fallback. The database records which path supplied each value.
 
+A food photo without an explicit request to log it becomes a draft rather than a diary entry. The user can correct, save, or discard that draft in a follow-up message. Drafts remain available for 24 hours, and creating a new one cancels the previous pending draft.
+
 ## How it works
 
 ```text
@@ -49,7 +52,6 @@ WhatsApp
   -> Meta Cloud API webhook
   -> Hono Worker with signature and sender checks
   -> Cloudflare Think agent for durable, queued multimodal turns and tool calls
-  -> Cloudflare Workflow for retryable multi-workout imports
   -> Cloudflare Whisper for voice-note transcription
   -> GPT-5.6 Luna for text, image understanding, reasoning, and tool selection
   -> Drizzle ORM and Cloudflare D1
@@ -58,9 +60,11 @@ WhatsApp
 
 Luna and Whisper run through the Worker's Cloudflare AI binding and AI Gateway with Unified Billing. No OpenAI API key is required.
 
-Think stores conversation and execution state in Durable Object SQLite. D1 remains the fitness system of record and separates source messages, fitness events, meal items, exercise sets, measurements, and an audit trail for corrections. Meta message IDs make retries idempotent.
+Think stores conversation, queue, and execution state in Durable Object SQLite. D1 remains the fitness system of record and separates source messages, meal drafts, profile memory, fitness events, meal items, exercise sets, measurements, and audit trails for profile and record changes. Meta message IDs make retries idempotent.
 
-Text, photos, and transcribed voice notes wait for 1.5 seconds of quiet before entering Think. A quick sequence of up to eight messages becomes one durable submission and one reply, so a photo followed by a caption or correction is interpreted together. Each turn sees the current burst plus the previous four user turns and their replies. Recent tool results stay in context for follow-ups, while older payloads are pruned and the structured history remains available through D1 queries.
+Text, photos, and transcribed voice notes enter Think's durable queue. The first message schedules an immediate flush. Messages received before that flush runs can join the same submission. Messages received while a submission is pending or running stay buffered for the next submission. Each submission contains at most eight messages and produces one reply.
+
+The model sees the current submission plus the previous eight user turns and their replies. It keeps media only for the current submission and removes completed tool calls and results from conversational context. The structured fitness history remains available through D1 queries.
 
 Exercises live in a catalog with stable IDs and a separate alias table. Before recording a workout, the agent checks submitted names against that catalog. Known variants such as `RDL` and `Romanian Deadlift (RDL)` share one history. For an unknown movement, the agent either registers a new exercise or attaches the name as an alias when an existing match is clear. The original submitted name remains on each set.
 
@@ -129,7 +133,7 @@ pnpm test
 pnpm build
 ```
 
-Tests run inside the Cloudflare Workers runtime and cover webhook verification, Meta signatures, D1 persistence, exercise normalization, range queries, previous-period comparisons, correction auditing, soft deletes, and Brave requests.
+Tests run inside the Cloudflare Workers runtime. They cover webhook verification, Meta signatures, WhatsApp delivery retries, multimodal turn preparation, conversation pruning, meal drafts, tool validation, D1 persistence, profile revisions, exercise normalization, range queries, previous-period comparisons, correction auditing, soft deletes, and Brave requests.
 
 Generate a migration after changing `src/db/schema.ts`:
 
