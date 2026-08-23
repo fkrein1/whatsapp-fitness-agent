@@ -8,7 +8,7 @@ The deployed version uses a Meta WhatsApp test number. Only the number configure
 
 See meal and run logging, voice-note support, calorie estimates, profile memory, and weekly training history in one continuous WhatsApp conversation.
 
-https://github.com/user-attachments/assets/726e23b0-0283-4052-b3fd-11ef7d09bd3b
+https://github.com/user-attachments/assets/4cd0a50b-7890-4fd1-bc5c-ad29f7454fb4
 
 ## Personalize the agent
 
