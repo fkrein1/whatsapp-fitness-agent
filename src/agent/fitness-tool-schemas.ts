@@ -208,11 +208,48 @@ export const manageRecordsInputSchema = z.object({
     .describe("Unambiguous corrections explicitly requested by the user."),
 });
 
+const pendingMealChangeSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("update_item"),
+    eventIndex: z.number().int().nonnegative(),
+    itemIndex: z.number().int().nonnegative(),
+    name: z.string().min(1).optional(),
+    quantity: z.number().finite().nonnegative().nullable().optional(),
+    unit: z.string().nullable().optional(),
+    caloriesKcal: z.number().finite().nonnegative().nullable().optional(),
+    proteinGrams: z.number().finite().nonnegative().nullable().optional(),
+    carbsGrams: z.number().finite().nonnegative().nullable().optional(),
+    fatGrams: z.number().finite().nonnegative().nullable().optional(),
+  }),
+  z.object({
+    type: z.literal("add_item"),
+    eventIndex: z.number().int().nonnegative(),
+    item: extractedMealItemSchema,
+  }),
+  z.object({
+    type: z.literal("remove_item"),
+    eventIndex: z.number().int().nonnegative(),
+    itemIndex: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal("update_meal"),
+    eventIndex: z.number().int().nonnegative(),
+    occurredAt: z.string().datetime().nullable().optional(),
+    summary: z.string().min(1).optional(),
+  }),
+]);
+
 export const pendingMealActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save") }),
   z.object({
     action: z.literal("edit"),
-    events: z.array(mealEventSchema).min(1),
+    changes: z
+      .array(pendingMealChangeSchema)
+      .min(1)
+      .max(20)
+      .describe(
+        "Only the requested changes, using the event and item indexes in the draft summary.",
+      ),
     saveNow: z.boolean().default(false),
   }),
   z.object({ action: z.literal("discard") }),
@@ -225,3 +262,4 @@ export type MeasurementQuery = z.infer<typeof measurementQuerySchema>;
 export type TimelineQuery = z.infer<typeof timelineQuerySchema>;
 export type ManageRecordsInput = z.infer<typeof manageRecordsInputSchema>;
 export type LogEventsInput = z.infer<typeof logEventsInputSchema>;
+export type PendingMealAction = z.infer<typeof pendingMealActionSchema>;

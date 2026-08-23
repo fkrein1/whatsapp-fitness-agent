@@ -56,6 +56,11 @@ import {
   jsonSafeToolOutput,
   recentConversationMessages,
 } from "./model-context";
+import {
+  applyPendingMealChanges,
+  compactMealSummary,
+  compactPendingMealContext,
+} from "./pending-meal";
 import { whatsappInputTypeSchema, whatsappTurnSchema, type WhatsAppTurn } from "./whatsapp-turn";
 
 const CORE_TOOL_NAMES = [
@@ -91,7 +96,6 @@ type PendingBurstRow = {
   payload_json: string | null;
 };
 
-const WHATSAPP_BURST_QUIET_SECONDS = 1.5;
 const WHATSAPP_BURST_LIMIT = 8;
 
 export class FitnessAgent extends Think<Env> {
@@ -140,6 +144,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
     const modelMessages = recentConversationMessages(
       context.messages,
       CONVERSATION_PREVIOUS_USER_TURNS + currentBurstSize,
+      currentBurstSize,
     );
     if (turn) {
       await Promise.all(turn.sourceMessageIds.map((id) => markSourceMessageProcessing(db, id)));
@@ -154,7 +159,10 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       const pendingMeal = await getLatestPendingMealProposal(db, turn.senderId, turnReceivedAt);
       if (pendingMeal) {
         hasPendingMeal = true;
-        pendingMealContext = `\n\nHá uma refeição pendente. Use resolve_pending_meal para salvar, editar ou descartar conforme o pedido atual. Um pedido claro como "adiciona" salva de imediato. Preserve os itens que Felipe não corrigiu.\n${JSON.stringify(pendingMeal.payload.events)}`;
+        pendingMealContext = compactPendingMealContext(
+          pendingMeal.payload.events,
+          pendingMeal.receivedAt,
+        );
       }
     }
     const trustedContext = turn
@@ -163,7 +171,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
     return {
       instructions: `${this.getSystemPrompt()}${trustedContext}${pendingMealContext}`,
       messages: modelMessages,
-      maxOutputTokens: 1500,
+      maxOutputTokens: 2500,
       maxRetries: 1,
       maxSteps: 8,
       activeTools: hasPendingMeal ? [...CORE_TOOL_NAMES, "resolve_pending_meal"] : CORE_TOOL_NAMES,
@@ -282,7 +290,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
             payload,
           );
           await this.markTurnProcessed(turn, { except: proposalSourceMessageId });
-          return { proposed: true, events };
+          return { proposed: true, draft: compactMealSummary(events) };
         },
       }),
       research_nutrition: tool({
@@ -336,7 +344,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       }),
       resolve_pending_meal: tool({
         description:
-          "Salva, edita ou descarta a refeição pendente. Uma instrução clara como 'adiciona' deve salvar sem nova confirmação.",
+          "Salva, descarta ou altera apenas os campos pedidos no rascunho de refeição. Use os índices do resumo. Uma instrução clara como 'adiciona' salva sem nova confirmação.",
         inputSchema: pendingMealActionSchema,
         execute: async (input) => {
           const turn = this.requireWhatsAppTurnMetadata();
@@ -367,7 +375,13 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
             await this.markTurnProcessed(turn, { except: turn.sourceMessageId });
             return { action: "discarded" };
           }
-          const events = input.events.map(normalizeLogEvent);
+          const pendingMeal = await getLatestPendingMealProposal(
+            db,
+            turn.senderId,
+            new Date(turn.receivedAt),
+          );
+          if (!pendingMeal) throw new Error("Não há proposta de refeição pendente");
+          const events = applyPendingMealChanges(pendingMeal.payload.events, input.changes);
           const updated = await updateLatestMealProposal(
             db,
             turn.senderId,
@@ -384,10 +398,10 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
             );
             if (!result) throw new Error("Não foi possível salvar a proposta atualizada");
             await this.markTurnProcessed(turn, { except: turn.sourceMessageId });
-            return { action: "edited_and_saved", events: updated.events };
+            return { action: "edited_and_saved", eventCount: updated.events.length };
           }
           await this.markTurnProcessed(turn);
-          return { action: "edited", events: updated.events };
+          return { action: "edited", draft: compactMealSummary(updated.events) };
         },
       }),
     };
@@ -404,7 +418,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
 
     const input = whatsappTurnSchema.parse(await request.json());
     await this.enqueueWhatsAppBurst(input);
-    return Response.json({ accepted: true, status: "debouncing" }, { status: 202 });
+    return Response.json({ accepted: true, status: "queued" }, { status: 202 });
   }
 
   private ensureWhatsAppBurstStorage() {
@@ -448,17 +462,12 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       VALUES (1, ${generation})
       ON CONFLICT(singleton) DO UPDATE SET generation = excluded.generation
     `;
-    await this.observeTurnForId(input.sourceMessageId, "burst_buffered", {
-      quietPeriodMs: WHATSAPP_BURST_QUIET_SECONDS * 1000,
-    });
-    await this.schedule(
-      WHATSAPP_BURST_QUIET_SECONDS,
-      "flushWhatsAppBurst",
-      { generation },
-      {
-        retry: { maxAttempts: 3 },
-      },
+    const activeWhatsAppSubmission = await this.hasActiveWhatsAppSubmission();
+    await this.observeTurnForId(
+      input.sourceMessageId,
+      activeWhatsAppSubmission ? "buffered_during_active_turn" : "turn_queued",
     );
+    if (!activeWhatsAppSubmission) await this.scheduleWhatsAppBuffer(generation);
   }
 
   async flushWhatsAppBurst(payload: unknown) {
@@ -469,6 +478,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       SELECT generation FROM cf_whatsapp_burst_state WHERE singleton = 1
     `[0];
     if (!state || state.generation !== parsed.data.generation) return;
+    if (await this.hasActiveWhatsAppSubmission()) return;
 
     const rows = this.sql<PendingBurstRow>`
       SELECT source_message_id, provider_message_id, sender_id, text, received_at, payload_json
@@ -523,7 +533,7 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
     } catch (error) {
       await this.handleWhatsAppTurnFailure(metadata, error);
       this.removeBufferedRows(rows, parsed.data.generation);
-      await this.scheduleRemainingBurst();
+      await this.scheduleWhatsAppBuffer();
       return;
     }
 
@@ -540,7 +550,8 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       status: submission.status,
     });
 
-    await this.scheduleRemainingBurst();
+    // Messages left in the buffer, including messages received while this turn
+    // runs, are submitted together after onChatResponse releases the turn.
   }
 
   private removeBufferedRows(rows: PendingBurstRow[], generation: string) {
@@ -556,24 +567,35 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
     `;
   }
 
-  private async scheduleRemainingBurst() {
+  private async scheduleWhatsAppBuffer(existingGeneration?: string) {
     const remaining = this.sql<{ count: number }>`
       SELECT COUNT(*) AS count FROM cf_whatsapp_burst_messages
     `[0]?.count;
     if (!remaining) return;
 
-    const generation = crypto.randomUUID();
+    const generation = existingGeneration ?? crypto.randomUUID();
     void this.sql`
       INSERT INTO cf_whatsapp_burst_state (singleton, generation)
       VALUES (1, ${generation})
       ON CONFLICT(singleton) DO UPDATE SET generation = excluded.generation
     `;
-    await this.schedule(
-      WHATSAPP_BURST_QUIET_SECONDS,
-      "flushWhatsAppBurst",
-      { generation },
-      { retry: { maxAttempts: 3 } },
+    await this.schedule(0, "flushWhatsAppBurst", { generation }, { retry: { maxAttempts: 3 } });
+  }
+
+  private async hasActiveWhatsAppSubmission() {
+    return (await this.listSubmissions({ status: ["pending", "running"] })).some(
+      (submission) => whatsappTurnMetadataSchema.safeParse(submission.metadata).success,
     );
+  }
+
+  private async scheduleWhatsAppBufferSafely() {
+    try {
+      await this.scheduleWhatsAppBuffer();
+    } catch (error) {
+      console.error("Failed to schedule buffered WhatsApp messages", {
+        error: getErrorMessage(error),
+      });
+    }
   }
 
   async onChatResponse(result: ChatResponseResult) {
@@ -607,6 +629,8 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
         error: errorText,
       });
       return;
+    } finally {
+      await this.scheduleWhatsAppBufferSafely();
     }
     await this.observeTurn("reply_sent");
   }
@@ -640,10 +664,14 @@ Consultas compactas bastam normalmente. Use full quando Felipe pedir itens, sér
       return;
     const parsed = whatsappTurnMetadataSchema.safeParse(submission.metadata);
     if (!parsed.success) return;
-    await this.handleWhatsAppTurnFailure(
-      parsed.data,
-      submission.error ?? `Submission ended with status ${submission.status}`,
-    );
+    try {
+      await this.handleWhatsAppTurnFailure(
+        parsed.data,
+        submission.error ?? `Submission ended with status ${submission.status}`,
+      );
+    } finally {
+      await this.scheduleWhatsAppBufferSafely();
+    }
   }
 
   private async handleWhatsAppTurnFailure(turn: WhatsAppTurnMetadata, error: unknown) {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { logEventsInputSchema, manageRecordsInputSchema } from "../src/agent/fitness-tool-schemas";
+import {
+  logEventsInputSchema,
+  manageRecordsInputSchema,
+  pendingMealActionSchema,
+} from "../src/agent/fitness-tool-schemas";
 
 describe("fitness tool schemas", () => {
   it("rejects negative nutrition in new meals", () => {
@@ -43,5 +47,19 @@ describe("fitness tool schemas", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("accepts compact pending meal patches", () => {
+    expect(
+      pendingMealActionSchema.parse({
+        action: "edit",
+        changes: [{ type: "update_item", eventIndex: 0, itemIndex: 1, quantity: 2 }],
+        saveNow: true,
+      }),
+    ).toEqual({
+      action: "edit",
+      changes: [{ type: "update_item", eventIndex: 0, itemIndex: 1, quantity: 2 }],
+      saveNow: true,
+    });
   });
 });
