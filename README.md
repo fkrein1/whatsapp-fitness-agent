@@ -1,8 +1,11 @@
+
 # WhatsApp fitness agent
 
 A single-user fitness log that lives in WhatsApp. Send a workout, run, meal photo, voice note, or body-weight update. The agent extracts structured records, stores them in Cloudflare D1, and answers questions about recent activity.
 
 The deployed version uses a Meta WhatsApp test number. Only the number configured as `WHATSAPP_RECIPIENT` can use it.
+
+<img width="350" alt="meal" src="https://github.com/user-attachments/assets/39e0ae48-a06d-4679-b3d3-615bccbb7d56" />
 
 ## What it records
 
