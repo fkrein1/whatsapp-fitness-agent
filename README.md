@@ -8,7 +8,7 @@ The deployed version uses a Meta WhatsApp test number. Only the number configure
 
 See meal and run logging, voice-note support, calorie estimates, profile memory, and weekly training history in one continuous WhatsApp conversation.
 
-[Watch the 38-second demo](demo/fitness-agent-demo.mp4)
+https://github.com/user-attachments/assets/726e23b0-0283-4052-b3fd-11ef7d09bd3b
 
 ## Personalize the agent
 
