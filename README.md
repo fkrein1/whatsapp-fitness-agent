@@ -191,3 +191,7 @@ Worker logs emit the same `sourceMessageId` and stage. AI Gateway requests also 
 ## Privacy
 
 The Worker exposes its data-handling policy at `/privacy`. Fitness messages and derived records are personal data. Do not make the agent multi-user without adding authentication, per-user isolation, retention controls, and deletion support.
+
+## License
+
+This project is available under the [MIT License](LICENSE).
