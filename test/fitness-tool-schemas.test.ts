@@ -14,6 +14,57 @@ import {
 } from "../src/agent/fitness-tool-schemas";
 
 describe("fitness tool schemas", () => {
+  it("accepts ISO timestamps with UTC or explicit offsets", () => {
+    for (const occurredAt of ["2026-08-24T12:30:00Z", "2026-08-24T09:30:00-03:00"]) {
+      expect(
+        recordEventsInputSchema.safeParse({
+          events: [
+            {
+              kind: "workout",
+              occurredAt,
+              summary: "Treino",
+              confidence: 1,
+              sets: [
+                {
+                  exercise: "Shoulder Press",
+                  setNumber: 1,
+                  reps: 10,
+                  weightKg: 70,
+                  durationSeconds: null,
+                  distanceMeters: null,
+                },
+              ],
+            },
+          ],
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("accepts replacing a complete workout in one correction", () => {
+    expect(
+      manageRecordsInputSchema.safeParse({
+        changes: [
+          {
+            action: "replace_workout",
+            eventRef: crypto.randomUUID(),
+            occurredAt: "2026-08-24T09:30:00-03:00",
+            sets: [
+              {
+                exercise: "Shoulder Press",
+                setNumber: 1,
+                reps: 10,
+                weightKg: 70,
+                durationSeconds: null,
+                distanceMeters: null,
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects negative nutrition in new meals", () => {
     const result = recordMealsInputSchema.safeParse({
       mode: "save",

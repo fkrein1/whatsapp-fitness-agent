@@ -32,7 +32,7 @@ export const extractedMeasurementSchema = z.object({
 
 export const extractedEventSchema = z.object({
   kind: z.enum(["meal", "workout", "run", "measurement", "note"]),
-  occurredAt: z.string().datetime().nullable(),
+  occurredAt: z.string().datetime({ offset: true }).nullable(),
   summary: z.string().min(1),
   confidence: z.number().min(0).max(1),
   mealItems: z.array(extractedMealItemSchema),

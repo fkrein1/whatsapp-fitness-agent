@@ -7,6 +7,8 @@ import {
   extractedMeasurementSchema,
 } from "../ingestion/types";
 
+const isoDateTimeSchema = z.string().datetime({ offset: true });
+
 export const dateRangeSchema = z
   .object({
     startDate: z
@@ -43,7 +45,7 @@ export const queryOptionsSchema = z.object({
 const eventBase = {
   occurredAt: z
     .string()
-    .datetime()
+    .datetime({ offset: true })
     .nullable()
     .default(null)
     .describe("When it happened. Use null to use the current WhatsApp message timestamp."),
@@ -143,7 +145,7 @@ const updateEventActionSchema = z.object({
   eventRef: z.string().uuid().describe("Event reference returned by a query tool."),
   occurredAt: z
     .string()
-    .datetime()
+    .datetime({ offset: true })
     .optional()
     .describe("Replacement timestamp when correcting date or time."),
   summary: z.string().min(1).optional().describe("Replacement summary."),
@@ -175,6 +177,18 @@ const updateExerciseSetActionSchema = z.object({
   distanceMeters: z.number().finite().nonnegative().nullable().optional(),
 });
 
+const replaceWorkoutActionSchema = z.object({
+  action: z.literal("replace_workout"),
+  eventRef: z.string().uuid().describe("Workout reference returned by a full training query."),
+  occurredAt: isoDateTimeSchema.optional().describe("Replacement timestamp, when requested."),
+  summary: z.string().min(1).optional().describe("Replacement workout summary."),
+  sets: z
+    .array(extractedExerciseSetSchema)
+    .min(1)
+    .max(100)
+    .describe("Complete replacement set list for this workout, including unchanged sets."),
+});
+
 const updateMeasurementActionSchema = z.object({
   action: z.literal("update_measurement"),
   measurementRef: z
@@ -202,6 +216,7 @@ export const manageRecordsInputSchema = z.object({
         updateEventActionSchema,
         updateMealItemActionSchema,
         updateExerciseSetActionSchema,
+        replaceWorkoutActionSchema,
         updateMeasurementActionSchema,
         deleteEventActionSchema,
       ]),
@@ -237,7 +252,7 @@ const pendingMealChangeSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("update_meal"),
     eventIndex: z.number().int().nonnegative(),
-    occurredAt: z.string().datetime().nullable().optional(),
+    occurredAt: isoDateTimeSchema.nullable().optional(),
     summary: z.string().min(1).optional(),
   }),
 ]);

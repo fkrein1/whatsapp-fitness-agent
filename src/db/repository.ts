@@ -1197,6 +1197,61 @@ export async function manageRecords(
 ) {
   const receipts: Array<{ action: string; ref: string; eventRef: string }> = [];
   for (const change of input.changes) {
+    if (change.action === "replace_workout") {
+      const [event] = await db
+        .select()
+        .from(fitnessEvents)
+        .where(
+          and(
+            eq(fitnessEvents.id, change.eventRef),
+            eq(fitnessEvents.kind, "workout"),
+            isNull(fitnessEvents.deletedAt),
+          ),
+        )
+        .limit(1);
+      if (!event) throw new Error(`Active workout not found: ${change.eventRef}`);
+      const beforeSets = await db
+        .select()
+        .from(exerciseSets)
+        .where(eq(exerciseSets.eventId, event.id));
+      const replacementSets: (typeof exerciseSets.$inferInsert)[] = [];
+      for (const set of change.sets) {
+        const exercise = await registerExercise(db, set.exercise);
+        replacementSets.push({
+          id: crypto.randomUUID(),
+          eventId: event.id,
+          exerciseId: exercise.id,
+          originalName: cleanExerciseName(set.exercise),
+          setNumber: set.setNumber,
+          reps: set.reps,
+          weightKg: set.weightKg,
+          durationSeconds: set.durationSeconds,
+          distanceMeters: set.distanceMeters,
+        });
+      }
+      await db.delete(exerciseSets).where(eq(exerciseSets.eventId, event.id));
+      for (const chunk of chunksOf(replacementSets)) await db.insert(exerciseSets).values(chunk);
+      const [afterEvent] = await db
+        .update(fitnessEvents)
+        .set({
+          ...(change.occurredAt ? { occurredAt: new Date(change.occurredAt) } : {}),
+          ...(change.summary ? { summary: change.summary } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(fitnessEvents.id, event.id))
+        .returning();
+      await auditRecordChange(
+        db,
+        sourceMessageId,
+        "update_event",
+        event.id,
+        { event, sets: beforeSets },
+        { event: afterEvent, sets: replacementSets },
+      );
+      receipts.push({ action: change.action, ref: event.id, eventRef: event.id });
+      continue;
+    }
+
     if (change.action === "update_event") {
       const [before] = await db
         .select()
@@ -1564,7 +1619,7 @@ async function updateChildRecord(db: Database, change: ManageRecordsInput["chang
 async function auditRecordChange(
   db: Database,
   sourceMessageId: string,
-  action: ManageRecordsInput["changes"][number]["action"],
+  action: Exclude<ManageRecordsInput["changes"][number]["action"], "replace_workout">,
   eventId: string,
   before: unknown,
   after: unknown,
