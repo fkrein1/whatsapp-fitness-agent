@@ -65,6 +65,12 @@ import {
   compactMealSummary,
   compactPendingMealContext,
 } from "./pending-meal";
+import {
+  mealQueryToolResult,
+  measurementQueryToolResult,
+  timelineQueryToolResult,
+  trainingQueryToolResult,
+} from "./query-tool-results";
 import { whatsappInputTypeSchema, whatsappTurnSchema, type WhatsAppTurn } from "./whatsapp-turn";
 
 const CORE_TOOL_NAMES = [
@@ -349,32 +355,40 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
           "Consulta refeições e totais. full inclui porções, macros, fontes e referências para correção.",
         inputSchema: compactToolSchema(mealQuerySchema),
         providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
-        execute: async (input) =>
-          jsonSafeToolOutput(await queryMeals(createDatabase(this.env.DB), input)),
+        execute: async (input) => {
+          const result = await queryMeals(createDatabase(this.env.DB), input);
+          return jsonSafeToolOutput(mealQueryToolResult(result));
+        },
       }),
       query_training: tool({
         description:
           "Consulta treinos, corridas, progressão, volume, cargas, distância e duração. full inclui séries e referências. Respeite filters: use a correspondência encontrada ou as sugestões; não repita uma busca filtrada vazia como full sem filtro.",
         inputSchema: compactToolSchema(trainingQuerySchema),
         providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
-        execute: async (input) =>
-          jsonSafeToolOutput(await queryTraining(createDatabase(this.env.DB), input)),
+        execute: async (input) => {
+          const result = await queryTraining(createDatabase(this.env.DB), input);
+          return jsonSafeToolOutput(trainingQueryToolResult(result));
+        },
       }),
       query_measurements: tool({
         description:
           "Consulta peso e outras medidas. compact resume a variação; full inclui cada medida e referência.",
         inputSchema: compactToolSchema(measurementQuerySchema),
         providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
-        execute: async (input) =>
-          jsonSafeToolOutput(await queryMeasurements(createDatabase(this.env.DB), input)),
+        execute: async (input) => {
+          const result = await queryMeasurements(createDatabase(this.env.DB), input);
+          return jsonSafeToolOutput(measurementQueryToolResult(result));
+        },
       }),
       query_timeline: tool({
         description:
-          "Consulta o diário em ordem cronológica para mostrar o que foi registrado ou aconteceu em uma data.",
+          "Consulta o diário em ordem cronológica para mostrar o que foi registrado ou aconteceu em uma data. full inclui referências e confiança.",
         inputSchema: compactToolSchema(timelineQuerySchema),
         providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
-        execute: async (input) =>
-          jsonSafeToolOutput(await queryTimeline(createDatabase(this.env.DB), input)),
+        execute: async (input) => {
+          const result = await queryTimeline(createDatabase(this.env.DB), input);
+          return jsonSafeToolOutput(timelineQueryToolResult(result, input.detail));
+        },
       }),
       manage_records: tool({
         description:
