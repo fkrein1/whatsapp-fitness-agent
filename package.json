@@ -1,7 +1,6 @@
 {
   "name": "whatsapp-fitness-agent",
   "version": "0.1.0",
-  "license": "MIT",
   "private": true,
   "description": "Single-user WhatsApp fitness log on Cloudflare Workers, D1, and GPT-5.6 Luna",
   "keywords": [
@@ -17,6 +16,7 @@
   "bugs": {
     "url": "https://github.com/fkrein1/whatsapp-fitness-agent/issues"
   },
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fkrein1/whatsapp-fitness-agent.git"

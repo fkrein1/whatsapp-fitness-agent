@@ -1,5 +1,5 @@
 import { Think } from "@cloudflare/think";
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAI, openai as openAI } from "@ai-sdk/openai";
 import type {
   ChatErrorContext,
   ChatResponseResult,
@@ -12,7 +12,7 @@ import type {
   TurnContext,
 } from "@cloudflare/think";
 import { tool } from "ai";
-import type { ToolSet, UIMessage } from "ai";
+import type { ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import { createGatewayProvider } from "workers-ai-provider/gateway";
 import { z } from "zod";
 
@@ -43,17 +43,18 @@ import { prepareWhatsAppParts } from "../ingestion/media";
 import { searchNutrition } from "../nutrition/brave";
 import { sendWhatsAppText } from "../whatsapp/client";
 import {
-  logEventsInputSchema,
+  compactToolSchema,
   manageRecordsInputSchema,
   mealQuerySchema,
   measurementQuerySchema,
   pendingMealActionSchema,
-  proposeMealInputSchema,
+  recordMealsInputSchema,
+  recordEventsInputSchema,
   timelineQuerySchema,
   trainingQuerySchema,
   updateSoulInputSchema,
 } from "./fitness-tool-schemas";
-import type { LogEventsInput } from "./fitness-tool-schemas";
+import type { RecordEventsInput, RecordMealsInput } from "./fitness-tool-schemas";
 import {
   CONVERSATION_PREVIOUS_USER_TURNS,
   jsonSafeToolOutput,
@@ -67,8 +68,9 @@ import {
 import { whatsappInputTypeSchema, whatsappTurnSchema, type WhatsAppTurn } from "./whatsapp-turn";
 
 const CORE_TOOL_NAMES = [
-  "log_events",
-  "propose_meal",
+  "tool_search",
+  "record_meals",
+  "record_events",
   "research_nutrition",
   "query_meals",
   "query_training",
@@ -77,6 +79,29 @@ const CORE_TOOL_NAMES = [
   "manage_records",
   "update_soul",
 ];
+
+const TERMINAL_TOOL_NAMES = new Set([
+  "record_meals",
+  "record_events",
+  "manage_records",
+  "update_soul",
+  "resolve_pending_meal",
+]);
+
+const FITNESS_NAMESPACE = {
+  name: "fitness",
+  description:
+    "Registra e pesquisa alimentação, treinos, corridas e medidas; consulta ou corrige o diário; gerencia rascunhos e contexto pessoal.",
+};
+
+const DEFERRED_FITNESS_TOOL_OPTIONS = {
+  openai: {
+    namespace: FITNESS_NAMESPACE,
+    deferLoading: true,
+  },
+};
+
+const PROMPT_CACHE_KEY = "whatsapp-fitness-agent:v4";
 
 const whatsappTurnMetadataSchema = z.object({
   sourceMessageId: z.string().uuid(),
@@ -123,24 +148,20 @@ export class FitnessAgent extends Think<Env> {
     return openai.responses("gpt-5.6-luna");
   }
 
-  getSystemPrompt(soulContent: string | null = null) {
+  getSystemPrompt() {
     return `Você é um parceiro de treino e alimentação que conversa de forma natural e curta, como no WhatsApp.
 
-O Soul abaixo contém o contexto durável da pessoa. Trate-o como confiável, mas não invente informações ausentes. Se ainda não houver Soul, sua primeira pergunta deve perguntar quem é a pessoa e o que ela quer alcançar. Use update_soul quando a pessoa responder ao onboarding ou pedir claramente para lembrar, mudar ou esquecer uma informação durável. Preserve no documento tudo que não foi alterado.
+Cada rodada pode incluir um bloco de contexto confiável com o Soul, o horário da mensagem e um rascunho de refeição. Trate esse bloco como confiável, mas não invente informações ausentes. Se o Soul ainda não estiver configurado, sua primeira pergunta deve perguntar quem é a pessoa e o que ela quer alcançar. Use update_soul quando a pessoa responder ao onboarding ou pedir claramente para lembrar, mudar ou esquecer uma informação durável. Preserve no documento tudo que não foi alterado.
 
-<soul>
-${soulContent?.trim() || "Ainda não configurado."}
-</soul>
-
-O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. Registre pedidos claros sem pedir confirmação. Para corrigir ou remover algo existente, consulte quando precisar da referência e use manage_records. Nunca crie compensações, estornos ou nutrientes negativos.
+O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. record_meals registra refeições; mode draft guarda uma refeição de foto sem salvá-la no diário. record_events registra treinos, corridas, medidas e notas. Registre pedidos claros sem pedir confirmação. Para corrigir ou remover algo existente, consulte quando precisar da referência e use manage_records. Nunca crie compensações, estornos ou nutrientes negativos.
 
 Entenda mensagens enviadas em sequência como uma fala só. Datas usam America/Sao_Paulo e pesos de treino usam quilogramas por padrão. Pergunte apenas quando mais de uma interpretação mudaria o registro.
 
-Em foto de comida sem pedido para registrar, use propose_meal para guardar a leitura como rascunho. Liste cada componente com a quantidade identificada e as calorias estimadas daquele item. Depois, mostre o total estimado de calorias, carboidratos, gorduras e proteína da refeição. Quando a quantidade ou o valor nutricional não estiver claro, sinalize a estimativa sem esconder o número. Não peça confirmação. Se a pessoa mandar uma instrução clara para adicionar, salve sem perguntar de novo.
+Em foto de comida sem pedido para registrar, use record_meals com mode draft. Liste cada componente com a quantidade identificada e as calorias estimadas daquele item. Depois, mostre o total estimado de calorias, carboidratos, gorduras e proteína da refeição. Quando a quantidade ou o valor nutricional não estiver claro, sinalize a estimativa sem esconder o número. Não peça confirmação. Se a pessoa mandar uma instrução clara para adicionar, salve sem perguntar de novo.
 
 Use research_nutrition quando calorias ou macros dependerem de marca, rótulo, restaurante ou produto que você não conhece com segurança. Em comida caseira ou porção visual, estime e diga que é estimativa.
 
-Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, séries, fontes ou detalhes. Ao relatar alimentação, use os registros ativos de query_meals e respeite o campo complete. Seja neutro sobre comida, peso e treino. Não mostre referências internas nem faça diagnóstico médico.`;
+Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, séries, fontes ou detalhes. Ao relatar alimentação, use query_meals e respeite o campo complete. Seja neutro sobre comida, peso e treino. Não mostre referências internas nem faça diagnóstico médico.`;
   }
 
   async beforeTurn(context: TurnContext): Promise<TurnConfig> {
@@ -148,23 +169,21 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
     const db = createDatabase(this.env.DB);
     let pendingMealContext = "";
     let hasPendingMeal = false;
+    let soulContent: string | null = null;
     const currentBurstSize = turn?.sourceMessageIds.length ?? 1;
-    const modelMessages = recentConversationMessages(
+    const conversationMessages = recentConversationMessages(
       context.messages,
       CONVERSATION_PREVIOUS_USER_TURNS + currentBurstSize,
       currentBurstSize,
     );
     if (turn) {
       await Promise.all(turn.sourceMessageIds.map((id) => markSourceMessageProcessing(db, id)));
-      await this.observeTurn("turn_started", {
-        burstSize: turn.sourceMessageIds.length,
-        storedMessageCount: context.messages.length,
-        modelMessageCount: modelMessages.length,
-        model: "openai/gpt-5.6-luna",
-        transport: "responses",
-      });
       const turnReceivedAt = new Date(turn.receivedAt);
-      const pendingMeal = await getLatestPendingMealProposal(db, turn.senderId, turnReceivedAt);
+      const [pendingMeal, soul] = await Promise.all([
+        getLatestPendingMealProposal(db, turn.senderId, turnReceivedAt),
+        getSoul(db, turn.senderId),
+      ]);
+      soulContent = soul?.content ?? null;
       if (pendingMeal) {
         hasPendingMeal = true;
         pendingMealContext = compactPendingMealContext(
@@ -173,12 +192,30 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
         );
       }
     }
-    const currentSoul = turn ? await getSoul(db, turn.senderId) : null;
-    const trustedContext = turn
-      ? `\n\nContexto confiável da requisição:\nEsta rodada contém ${turn.sourceMessageIds.length} mensagem(ns) nova(s) recebida(s) em sequência. A mais recente chegou em ${turn.receivedAt}. Interprete datas relativas no fuso America/Sao_Paulo.`
-      : "";
+    const cachedContext = turn
+      ? contextWithCachedInstructions(
+          this.getSystemPrompt(),
+          soulContent,
+          buildDynamicTurnContext(turn, pendingMealContext),
+          conversationMessages,
+        )
+      : null;
+    const modelMessages = cachedContext?.messages ?? conversationMessages;
+    if (turn) {
+      await this.observeTurn("turn_started", {
+        burstSize: turn.sourceMessageIds.length,
+        storedMessageCount: context.messages.length,
+        modelMessageCount: modelMessages.length,
+        model: "openai/gpt-5.6-luna",
+        transport: "responses",
+      });
+    }
     return {
-      instructions: `${this.getSystemPrompt(currentSoul?.content)}${trustedContext}${pendingMealContext}`,
+      instructions: cachedContext
+        ? // Think 0.16 types instructions as string, but AI SDK 7 also accepts a
+          // SystemModelMessage when provider options such as cache breakpoints are needed.
+          (cachedContext.instructions as unknown as string)
+        : this.getSystemPrompt(),
       messages: modelMessages,
       maxOutputTokens: 2500,
       maxRetries: 1,
@@ -188,6 +225,8 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
         openai: {
           reasoningEffort: "medium",
           store: false,
+          promptCacheKey: PROMPT_CACHE_KEY,
+          promptCacheOptions: { mode: "implicit", ttl: "30m" },
         },
       },
       ...(turn
@@ -212,7 +251,7 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
       stepNumber: context.stepNumber,
       sourceStatuses: statuses.map((source) => source?.status ?? "missing"),
     });
-    return {};
+    return toolsForNextStep(context);
   }
 
   async beforeToolCall(context: ToolCallContext) {
@@ -240,6 +279,8 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
       finishReason: context.finishReason,
       toolNames: context.toolCalls.map((call) => call.toolName),
       inputTokens: context.usage.inputTokens ?? null,
+      cacheReadTokens: context.usage.inputTokenDetails.cacheReadTokens ?? null,
+      cacheWriteTokens: context.usage.inputTokenDetails.cacheWriteTokens ?? null,
       outputTokens: context.usage.outputTokens ?? null,
       totalTokens: context.usage.totalTokens ?? null,
     });
@@ -247,105 +288,99 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
 
   getTools(): ToolSet {
     return {
-      log_events: tool({
+      tool_search: openAI.tools.toolSearch(),
+      record_meals: tool({
         description:
-          "Registra fatos novos do turno atual: refeições, treinos, corridas, medidas ou notas. Não use para corrigir ou apagar registros existentes.",
-        inputSchema: logEventsInputSchema,
-        execute: async ({ events }) => {
+          "Salva refeições novas ou guarda refeições de foto como rascunho. Não use para treinos, corridas, medidas, notas, correções ou exclusões.",
+        inputSchema: compactToolSchema(recordMealsInputSchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
+        execute: async ({ mode, meals }) => {
           const turn = this.requireWhatsAppTurnMetadata();
-          const normalizedEvents = events.map(normalizeLogEvent);
-          const result = await saveIngestion(
-            createDatabase(this.env.DB),
-            turn.sourceMessageId,
-            { events: normalizedEvents, query: null, reply: "Recorded." },
-            new Date(turn.receivedAt),
-            { externalKeyPrefix: turn.sourceMessageId },
-          );
-          await this.markTurnProcessed(turn, { except: turn.sourceMessageId });
-          return {
-            saved: true,
-            eventCount: normalizedEvents.length,
-            insertedEvents: result.insertedEvents,
-            reusedEvents: result.reusedEvents,
-            receipt: normalizedEvents.map((event) => ({
-              kind: event.kind,
-              occurredAt: event.occurredAt ?? turn.receivedAt,
-              summary: event.summary,
-              exerciseSetCount: event.exerciseSets.length,
-              mealItemCount: event.mealItems.length,
-              measurementCount: event.measurements.length,
-            })),
-          };
+          const normalizedEvents = meals.map(normalizeMealEvent);
+          if (mode === "draft") {
+            const imageIndex = turn.inputTypes.lastIndexOf("image");
+            const proposalSourceMessageId =
+              turn.sourceMessageIds[imageIndex] ?? turn.sourceMessageId;
+            const payload: IngestionResult = {
+              events: normalizedEvents,
+              query: null,
+              reply: "Leitura da foto guardada como rascunho.",
+            };
+            await createMealProposal(
+              createDatabase(this.env.DB),
+              proposalSourceMessageId,
+              turn.senderId,
+              payload,
+            );
+            await this.markTurnProcessed(turn, { except: proposalSourceMessageId });
+            return { drafted: true, draft: compactMealSummary(normalizedEvents) };
+          }
+          return this.saveRecordedEvents(turn, normalizedEvents, "record-meals");
         },
       }),
-      propose_meal: tool({
+      record_events: tool({
         description:
-          "Guarda como rascunho uma refeição identificada em foto quando a pessoa ainda não pediu para registrar. Uma nova proposta substitui a anterior.",
-        inputSchema: proposeMealInputSchema,
+          "Salva treinos, corridas, medidas e notas novos. Não use para refeições, correções ou exclusões.",
+        inputSchema: compactToolSchema(recordEventsInputSchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async ({ events: inputEvents }) => {
           const turn = this.requireWhatsAppTurnMetadata();
-          const events = inputEvents.map(normalizeLogEvent);
-          const imageIndex = turn.inputTypes.lastIndexOf("image");
-          const proposalSourceMessageId = turn.sourceMessageIds[imageIndex] ?? turn.sourceMessageId;
-          const payload: IngestionResult = {
-            events,
-            query: null,
-            reply: "Leitura da foto guardada como rascunho.",
-          };
-          await createMealProposal(
-            createDatabase(this.env.DB),
-            proposalSourceMessageId,
-            turn.senderId,
-            payload,
-          );
-          await this.markTurnProcessed(turn, { except: proposalSourceMessageId });
-          return { proposed: true, draft: compactMealSummary(events) };
+          const normalizedEvents = inputEvents.map(normalizeLogEvent);
+          return this.saveRecordedEvents(turn, normalizedEvents, "record-events");
         },
       }),
       research_nutrition: tool({
         description:
           "Pesquisa calorias e macros quando marca, rótulo, restaurante ou produto não são conhecidos com segurança. Não use se a pessoa ou a foto do rótulo já forneceram os valores.",
-        inputSchema: z.object({
-          queries: z
-            .array(z.string().min(1))
-            .min(1)
-            .max(3)
-            .describe("Up to three concise Brazilian Portuguese nutrition searches."),
-        }),
+        inputSchema: compactToolSchema(
+          z.object({
+            queries: z
+              .array(z.string().min(1))
+              .min(1)
+              .max(3)
+              .describe("Up to three concise Brazilian Portuguese nutrition searches."),
+          }),
+        ),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: ({ queries }) => searchNutrition(queries, this.env),
       }),
       query_meals: tool({
         description:
-          "Consulta refeições ativas em qualquer período. compact traz refeições e totais; full acrescenta porções, macros, fontes e referências para correção.",
-        inputSchema: mealQuerySchema,
+          "Consulta refeições e totais. full inclui porções, macros, fontes e referências para correção.",
+        inputSchema: compactToolSchema(mealQuerySchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async (input) =>
           jsonSafeToolOutput(await queryMeals(createDatabase(this.env.DB), input)),
       }),
       query_training: tool({
         description:
-          "Consulta treinos, corridas, progressão, volume, cargas, distância e duração. full traz cada série e referências para correção.",
-        inputSchema: trainingQuerySchema,
+          "Consulta treinos, corridas, progressão, volume, cargas, distância e duração. full inclui séries e referências. Respeite filters: use a correspondência encontrada ou as sugestões; não repita uma busca filtrada vazia como full sem filtro.",
+        inputSchema: compactToolSchema(trainingQuerySchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async (input) =>
           jsonSafeToolOutput(await queryTraining(createDatabase(this.env.DB), input)),
       }),
       query_measurements: tool({
         description:
-          "Consulta peso e outras medidas corporais. compact traz primeira, última e variação; full traz cada medida e suas referências.",
-        inputSchema: measurementQuerySchema,
+          "Consulta peso e outras medidas. compact resume a variação; full inclui cada medida e referência.",
+        inputSchema: compactToolSchema(measurementQuerySchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async (input) =>
           jsonSafeToolOutput(await queryMeasurements(createDatabase(this.env.DB), input)),
       }),
       query_timeline: tool({
         description:
-          "Consulta vários tipos do diário em ordem cronológica. Use para saber o que foi registrado ou o que aconteceu em uma data.",
-        inputSchema: timelineQuerySchema,
+          "Consulta o diário em ordem cronológica para mostrar o que foi registrado ou aconteceu em uma data.",
+        inputSchema: compactToolSchema(timelineQuerySchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async (input) =>
           jsonSafeToolOutput(await queryTimeline(createDatabase(this.env.DB), input)),
       }),
       manage_records: tool({
         description:
           "Corrige ou remove registros existentes por referência. Consulte primeiro se a conversa recente não trouxer a referência exata; não adivinhe entre vários candidatos.",
-        inputSchema: manageRecordsInputSchema,
+        inputSchema: compactToolSchema(manageRecordsInputSchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async (input) => {
           const turn = this.requireWhatsAppTurnMetadata();
           return manageRecords(createDatabase(this.env.DB), turn.sourceMessageId, input);
@@ -354,7 +389,8 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
       update_soul: tool({
         description:
           "Atualiza o contexto pessoal durável quando a pessoa responde ao onboarding ou pede claramente para lembrar, mudar ou esquecer uma informação sobre identidade, objetivos, preferências ou circunstâncias. Envie o documento Markdown completo e preserve tudo que não mudou. Não use para refeições, treinos, peso ou outros eventos do diário.",
-        inputSchema: updateSoulInputSchema,
+        inputSchema: compactToolSchema(updateSoulInputSchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async ({ content, reason }) => {
           const turn = this.requireWhatsAppTurnMetadata();
           return updateSoul(
@@ -369,7 +405,8 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
       resolve_pending_meal: tool({
         description:
           "Salva, descarta ou altera apenas os campos pedidos no rascunho de refeição. Use os índices do resumo. Uma instrução clara como 'adiciona' salva sem nova confirmação.",
-        inputSchema: pendingMealActionSchema,
+        inputSchema: compactToolSchema(pendingMealActionSchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async (input) => {
           const turn = this.requireWhatsAppTurnMetadata();
           const db = createDatabase(this.env.DB);
@@ -776,6 +813,35 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
     );
   }
 
+  private async saveRecordedEvents(
+    turn: WhatsAppTurnMetadata,
+    events: IngestionResult["events"],
+    keyNamespace: string,
+  ) {
+    const result = await saveIngestion(
+      createDatabase(this.env.DB),
+      turn.sourceMessageId,
+      { events, query: null, reply: "Recorded." },
+      new Date(turn.receivedAt),
+      { externalKeyPrefix: `${turn.sourceMessageId}:${keyNamespace}` },
+    );
+    await this.markTurnProcessed(turn, { except: turn.sourceMessageId });
+    return {
+      saved: true,
+      eventCount: events.length,
+      insertedEvents: result.insertedEvents,
+      reusedEvents: result.reusedEvents,
+      receipt: events.map((event) => ({
+        kind: event.kind,
+        occurredAt: event.occurredAt ?? turn.receivedAt,
+        summary: event.summary,
+        exerciseSetCount: event.exerciseSets.length,
+        mealItemCount: event.mealItems.length,
+        measurementCount: event.measurements.length,
+      })),
+    };
+  }
+
   private async observeTurnForId(
     sourceMessageId: string,
     stage: string,
@@ -794,8 +860,22 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
   }
 }
 
+function normalizeMealEvent(
+  meal: RecordMealsInput["meals"][number],
+): IngestionResult["events"][number] {
+  return {
+    kind: "meal",
+    occurredAt: meal.occurredAt,
+    summary: meal.summary,
+    confidence: meal.confidence,
+    mealItems: meal.items,
+    exerciseSets: [],
+    measurements: [],
+  };
+}
+
 function normalizeLogEvent(
-  event: LogEventsInput["events"][number],
+  event: RecordEventsInput["events"][number],
 ): IngestionResult["events"][number] {
   const base = {
     kind: event.kind,
@@ -807,7 +887,6 @@ function normalizeLogEvent(
     measurements: [],
   } satisfies IngestionResult["events"][number];
 
-  if (event.kind === "meal") return { ...base, mealItems: event.items };
   if (event.kind === "workout") return { ...base, exerciseSets: event.sets };
   if (event.kind === "measurement") return { ...base, measurements: event.measurements };
   if (event.kind === "run") {
@@ -829,6 +908,46 @@ function normalizeLogEvent(
     };
   }
   return base;
+}
+
+export function contextWithCachedInstructions(
+  systemPrompt: string,
+  soulContent: string | null,
+  dynamicContext: string,
+  conversationMessages: readonly ModelMessage[],
+): { instructions: SystemModelMessage; messages: ModelMessage[] } {
+  return {
+    instructions: {
+      role: "system",
+      content: `${systemPrompt}
+
+Contexto pessoal confiável:
+<soul>
+${soulContent?.trim() || "Ainda não configurado."}
+</soul>`,
+      providerOptions: {
+        openai: {
+          promptCacheBreakpoint: { mode: "explicit" },
+        },
+      },
+    },
+    messages: [{ role: "user", content: dynamicContext }, ...conversationMessages],
+  };
+}
+
+function buildDynamicTurnContext(turn: WhatsAppTurnMetadata, pendingMealContext: string) {
+  return `Contexto confiável desta rodada:
+Esta rodada contém ${turn.sourceMessageIds.length} mensagem(ns) nova(s). A mais recente chegou em ${turn.receivedAt}. Interprete datas relativas no fuso America/Sao_Paulo.${pendingMealContext}`;
+}
+
+export function toolsForNextStep(context: {
+  steps: readonly { toolCalls: readonly { toolName: string }[] }[];
+}) {
+  const toolNames = context.steps.at(-1)?.toolCalls.map((call) => call.toolName) ?? [];
+  if (toolNames.some((name) => TERMINAL_TOOL_NAMES.has(name))) {
+    return { toolChoice: "none" as const };
+  }
+  return {};
 }
 
 async function prepareWhatsAppPartsWithRetry(turn: WhatsAppTurn, env: Env) {

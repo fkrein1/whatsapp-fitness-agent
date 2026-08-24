@@ -1,7 +1,7 @@
 import { pruneMessages } from "ai";
 import type { JSONValue, ModelMessage } from "ai";
 
-export const CONVERSATION_PREVIOUS_USER_TURNS = 8;
+export const CONVERSATION_PREVIOUS_USER_TURNS = 5;
 
 export function recentConversationMessages(
   messages: readonly ModelMessage[],

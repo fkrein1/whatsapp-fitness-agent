@@ -1,3 +1,4 @@
+import { jsonSchema, type Schema } from "ai";
 import { z } from "zod";
 
 import {
@@ -56,13 +57,6 @@ const mealEventSchema = z.object({
   items: z.array(extractedMealItemSchema).min(1).describe("Foods or drinks in this meal."),
 });
 
-export const proposeMealInputSchema = z.object({
-  events: z
-    .array(mealEventSchema)
-    .min(1)
-    .describe("Refeições identificadas na foto que devem ficar disponíveis para salvar depois."),
-});
-
 const workoutEventSchema = z.object({
   kind: z.literal("workout"),
   ...eventBase,
@@ -90,19 +84,28 @@ const noteEventSchema = z.object({
   ...eventBase,
 });
 
-export const logEventsInputSchema = z.object({
-  events: z
-    .array(
-      z.discriminatedUnion("kind", [
-        mealEventSchema,
-        workoutEventSchema,
-        runEventSchema,
-        measurementEventSchema,
-        noteEventSchema,
-      ]),
-    )
+const recordableEventSchema = z.discriminatedUnion("kind", [
+  workoutEventSchema,
+  runEventSchema,
+  measurementEventSchema,
+  noteEventSchema,
+]);
+
+export const recordMealsInputSchema = z.object({
+  mode: z
+    .enum(["save", "draft"])
+    .describe("save writes meals now; draft keeps photographed meals pending."),
+  meals: z
+    .array(mealEventSchema.omit({ kind: true }))
     .min(1)
-    .describe("Every distinct record requested in the current message burst."),
+    .describe("Every distinct meal requested or identified in the current message batch."),
+});
+
+export const recordEventsInputSchema = z.object({
+  events: z
+    .array(recordableEventSchema)
+    .min(1)
+    .describe("Every workout, run, measurement, or note requested in the current message batch."),
 });
 
 export const mealQuerySchema = queryOptionsSchema;
@@ -270,11 +273,58 @@ export const updateSoulInputSchema = z.object({
     .describe("Concise explanation of what the person asked to add, change, or forget."),
 });
 
+export function compactToolSchema<T extends z.ZodType>(schema: T): Schema<z.output<T>> {
+  return jsonSchema<z.output<T>>(() => smallestJsonSchema(schema), {
+    validate: (value) => {
+      const result = schema.safeParse(value);
+      return result.success
+        ? { success: true, value: result.data }
+        : { success: false, error: result.error };
+    },
+  });
+}
+
+function smallestJsonSchema(schema: z.ZodType) {
+  const candidates = [
+    compactJsonSchema(z.toJSONSchema(schema, { reused: "inline" })),
+    compactJsonSchema(z.toJSONSchema(schema, { reused: "ref" })),
+  ];
+  return candidates.reduce((smallest, candidate) =>
+    JSON.stringify(candidate).length < JSON.stringify(smallest).length ? candidate : smallest,
+  );
+}
+
+function compactJsonSchema(value: unknown): Record<string, unknown> {
+  const compact = compactJsonValue(value);
+  if (!isJsonObject(compact)) throw new Error("Tool schema must be a JSON object");
+  delete compact.$schema;
+  return compact;
+}
+
+function compactJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(compactJsonValue);
+  if (!isJsonObject(value)) return value;
+
+  const compact = Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, compactJsonValue(child)]),
+  );
+  delete compact.default;
+  delete compact.pattern;
+  if (compact.maximum === Number.MAX_SAFE_INTEGER) delete compact.maximum;
+  if (compact.minimum === Number.MIN_SAFE_INTEGER) delete compact.minimum;
+  return compact;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export type QueryOptions = z.infer<typeof queryOptionsSchema>;
 export type MealQuery = z.infer<typeof mealQuerySchema>;
 export type TrainingQuery = z.infer<typeof trainingQuerySchema>;
 export type MeasurementQuery = z.infer<typeof measurementQuerySchema>;
 export type TimelineQuery = z.infer<typeof timelineQuerySchema>;
 export type ManageRecordsInput = z.infer<typeof manageRecordsInputSchema>;
-export type LogEventsInput = z.infer<typeof logEventsInputSchema>;
+export type RecordMealsInput = z.infer<typeof recordMealsInputSchema>;
+export type RecordEventsInput = z.infer<typeof recordEventsInputSchema>;
 export type PendingMealAction = z.infer<typeof pendingMealActionSchema>;

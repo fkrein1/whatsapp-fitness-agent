@@ -2,13 +2,18 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 
 import { jsonSafeToolOutput, recentConversationMessages } from "../src/agent/model-context";
+import {
+  contextWithCachedInstructions,
+  FitnessAgent,
+  toolsForNextStep,
+} from "../src/agent/fitness-agent";
 
 describe("agent model context", () => {
-  it("keeps the current and eight previous user turns with their conversational replies", () => {
+  it("keeps the current and five previous user turns with their conversational replies", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "too old" },
       { role: "assistant", content: "too old reply" },
-      ...Array.from({ length: 9 }, (_, index) => [
+      ...Array.from({ length: 6 }, (_, index) => [
         { role: "user", content: `request ${index + 1}` } satisfies ModelMessage,
         { role: "assistant", content: `reply ${index + 1}` } satisfies ModelMessage,
       ]).flat(),
@@ -53,13 +58,13 @@ describe("agent model context", () => {
     ]);
   });
 
-  it("can keep a multi-message burst plus eight previous user turns", () => {
+  it("can keep a multi-message burst plus five previous user turns", () => {
     const messages = Array.from({ length: 12 }, (_, index) => ({
       role: "user" as const,
       content: `message ${index + 1}`,
     }));
 
-    expect(recentConversationMessages(messages, 11, 3)).toEqual(messages.slice(1));
+    expect(recentConversationMessages(messages, 8, 3)).toEqual(messages.slice(4));
   });
 
   it("keeps media only for the current user burst", () => {
@@ -100,4 +105,72 @@ describe("agent model context", () => {
       jsonSafeToolOutput({ occurredAt: new Date("2026-08-22T12:00:00.000Z"), value: 80 }),
     ).toEqual({ occurredAt: "2026-08-22T12:00:00.000Z", value: 80 });
   });
+
+  it("ends the explicit cache prefix after the stable prompt and Soul", () => {
+    const context = contextWithCachedInstructions(
+      "stable prompt",
+      "stable Soul",
+      "changing timestamp",
+      [{ role: "user", content: "current message" }],
+    );
+
+    expect(context).toEqual({
+      instructions: {
+        role: "system",
+        content: "stable prompt\n\nContexto pessoal confiável:\n<soul>\nstable Soul\n</soul>",
+        providerOptions: {
+          openai: {
+            promptCacheBreakpoint: { mode: "explicit" },
+          },
+        },
+      },
+      messages: [
+        { role: "user", content: "changing timestamp" },
+        { role: "user", content: "current message" },
+      ],
+    });
+  });
+
+  it("keeps nonterminal deferred tools stable and disables them after writes", () => {
+    expect(toolsAfter("research_nutrition")).toEqual({});
+    expect(toolsAfter("query_meals")).toEqual({});
+    expect(toolsAfter("record_events")).toEqual({
+      toolChoice: "none",
+    });
+    expect(toolsAfter("record_meals")).toEqual({
+      toolChoice: "none",
+    });
+  });
+
+  it("puts every fitness function in one deferred namespace", () => {
+    const agent = Object.create(FitnessAgent.prototype) as FitnessAgent;
+    const tools = agent.getTools();
+
+    expect(tools.tool_search).toMatchObject({ type: "provider", id: "openai.tool_search" });
+    for (const name of [
+      "record_events",
+      "record_meals",
+      "research_nutrition",
+      "query_meals",
+      "query_training",
+      "query_measurements",
+      "query_timeline",
+      "manage_records",
+      "update_soul",
+      "resolve_pending_meal",
+    ]) {
+      expect(tools[name]).toMatchObject({
+        providerOptions: {
+          openai: {
+            namespace: { name: "fitness" },
+            deferLoading: true,
+          },
+        },
+      });
+    }
+  });
 });
+
+function toolsAfter(toolName: string) {
+  return toolsForNextStep({ steps: [{ toolCalls: [{ toolName }] }] });
+}

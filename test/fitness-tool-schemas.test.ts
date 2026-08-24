@@ -1,17 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  logEventsInputSchema,
+  compactToolSchema,
   manageRecordsInputSchema,
+  mealQuerySchema,
+  measurementQuerySchema,
   pendingMealActionSchema,
+  recordEventsInputSchema,
+  recordMealsInputSchema,
+  timelineQuerySchema,
+  trainingQuerySchema,
+  updateSoulInputSchema,
 } from "../src/agent/fitness-tool-schemas";
 
 describe("fitness tool schemas", () => {
   it("rejects negative nutrition in new meals", () => {
-    const result = logEventsInputSchema.safeParse({
-      events: [
+    const result = recordMealsInputSchema.safeParse({
+      mode: "save",
+      meals: [
         {
-          kind: "meal",
           occurredAt: null,
           summary: "Estorno",
           confidence: 1,
@@ -28,6 +35,22 @@ describe("fitness tool schemas", () => {
               nutritionSource: "user_provided",
             },
           ],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("keeps meals out of the general event recorder", () => {
+    const result = recordEventsInputSchema.safeParse({
+      events: [
+        {
+          kind: "meal",
+          occurredAt: null,
+          summary: "Almoço",
+          confidence: 1,
+          items: [],
         },
       ],
     });
@@ -61,5 +84,55 @@ describe("fitness tool schemas", () => {
       changes: [{ type: "update_item", eventIndex: 0, itemIndex: 1, quantity: 2 }],
       saveNow: true,
     });
+  });
+
+  it("sends compact JSON Schema while preserving Zod validation", async () => {
+    const schema = compactToolSchema(mealQuerySchema);
+    const serialized = JSON.stringify(await schema.jsonSchema);
+
+    expect(serialized).not.toContain('"default"');
+    expect(serialized).not.toContain('"pattern"');
+    expect(serialized).not.toContain(String(Number.MAX_SAFE_INTEGER));
+    expect(serialized.length).toBeLessThan(2_000);
+    expect(
+      await schema.validate?.({
+        range: { startDate: "not-a-date", endDate: "2026-08-23" },
+      }),
+    ).toMatchObject({ success: false });
+    expect(
+      await schema.validate?.({
+        range: { startDate: "2026-08-23", endDate: "2026-08-23" },
+      }),
+    ).toMatchObject({
+      success: true,
+      value: { detail: "compact", compare: "none", limit: 20, offset: 0 },
+    });
+  });
+
+  it("keeps the meal recorder smaller than the former event union", async () => {
+    const serialized = JSON.stringify(await compactToolSchema(recordMealsInputSchema).jsonSchema);
+
+    expect(serialized.length).toBeLessThan(2_500);
+  });
+
+  it("keeps every deferred tool schema independently bounded", async () => {
+    const schemas = [
+      recordEventsInputSchema,
+      recordMealsInputSchema,
+      mealQuerySchema,
+      trainingQuerySchema,
+      measurementQuerySchema,
+      timelineQuerySchema,
+      manageRecordsInputSchema,
+      pendingMealActionSchema,
+      updateSoulInputSchema,
+    ];
+    const lengths = await Promise.all(
+      schemas.map(
+        async (schema) => JSON.stringify(await compactToolSchema(schema).jsonSchema).length,
+      ),
+    );
+
+    expect(Math.max(...lengths)).toBeLessThan(4_500);
   });
 });
