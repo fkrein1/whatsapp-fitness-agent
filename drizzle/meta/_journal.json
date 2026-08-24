@@ -71,6 +71,13 @@
       "when": 1787450609984,
       "tag": "0009_tough_gladiator",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1787528274156,
+      "tag": "0010_add_supino_alias",
+      "breakpoints": true
     }
   ]
 }

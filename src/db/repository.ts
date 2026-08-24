@@ -166,10 +166,33 @@ export async function registerExercise(db: Database, name: string, existingExerc
 }
 
 function nameSimilarity(left: string, right: string) {
-  const leftTokens = new Set(normalizeExerciseKey(left).split(" "));
-  const rightTokens = new Set(normalizeExerciseKey(right).split(" "));
+  const normalizedLeft = normalizeExerciseKey(left);
+  const normalizedRight = normalizeExerciseKey(right);
+  const leftTokens = new Set(normalizedLeft.split(" "));
+  const rightTokens = new Set(normalizedRight.split(" "));
   const shared = [...leftTokens].filter((token) => rightTokens.has(token)).length;
-  return shared / new Set([...leftTokens, ...rightTokens]).size;
+  const tokenSimilarity = shared / new Set([...leftTokens, ...rightTokens]).size;
+  const editSimilarity =
+    1 -
+    editDistance(normalizedLeft, normalizedRight) /
+      Math.max(normalizedLeft.length, normalizedRight.length, 1);
+  return Math.max(tokenSimilarity, editSimilarity);
+}
+
+function editDistance(left: string, right: string) {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length]!;
 }
 
 export async function resolveExerciseNames(db: Database, names: string[]) {
@@ -177,18 +200,36 @@ export async function resolveExerciseNames(db: Database, names: string[]) {
     .select({ id: exercises.id, canonicalName: exercises.canonicalName })
     .from(exercises)
     .orderBy(exercises.canonicalName);
+  const aliases = await db
+    .select({
+      id: exercises.id,
+      canonicalName: exercises.canonicalName,
+      alias: exerciseAliases.alias,
+    })
+    .from(exerciseAliases)
+    .innerJoin(exercises, eq(exerciseAliases.exerciseId, exercises.id));
+  const searchableNames = [
+    ...catalog.map((exercise) => ({ ...exercise, searchName: exercise.canonicalName })),
+    ...aliases.map((exercise) => ({ ...exercise, searchName: exercise.alias })),
+  ];
 
   return Promise.all(
     [...new Set(names.map(cleanExerciseName))].map(async (name) => {
       const exact = await findExerciseByName(db, name);
       const candidates: { id: string; canonicalName: string; similarity: number }[] = [];
       if (!exact) {
-        for (const exercise of catalog) {
+        for (const exercise of searchableNames) {
           const candidate = {
-            ...exercise,
-            similarity: nameSimilarity(name, exercise.canonicalName),
+            id: exercise.id,
+            canonicalName: exercise.canonicalName,
+            similarity: nameSimilarity(name, exercise.searchName),
           };
           if (!candidate.similarity) continue;
+          const existingIndex = candidates.findIndex((existing) => existing.id === candidate.id);
+          if (existingIndex >= 0) {
+            if (candidates[existingIndex]!.similarity >= candidate.similarity) continue;
+            candidates.splice(existingIndex, 1);
+          }
           const insertionIndex = candidates.findIndex(
             (existing) => existing.similarity < candidate.similarity,
           );
@@ -1025,6 +1066,7 @@ export async function queryTraining(db: Database, input: TrainingQuery) {
   return {
     range: input.range,
     detail: input.detail,
+    filters: current.filters,
     summary: summarizeTraining(current),
     sessions: pageSessions.map((session) => ({
       ref: session.id,
@@ -1256,8 +1298,12 @@ async function loadTrainingRange(
   const resolvedFilters = exerciseFilters.length
     ? await resolveExerciseNames(db, exerciseFilters)
     : [];
+  const filterMatches = resolvedFilters.map((filter) => ({
+    ...filter,
+    match: filter.exact ?? confidentQueryMatch(filter.candidates),
+  }));
   const filterIds = new Set(
-    resolvedFilters.flatMap((filter) => (filter.exact ? [filter.exact.id] : [])),
+    filterMatches.flatMap((filter) => (filter.match ? [filter.match.id] : [])),
   );
   const events = await db
     .select({
@@ -1325,7 +1371,24 @@ async function loadTrainingRange(
           )
         : event.sets,
     }));
-  return { sessions };
+  return {
+    sessions,
+    filters: filterMatches.map((filter) => ({
+      submittedName: filter.submittedName,
+      matched: filter.match?.canonicalName ?? null,
+      matchedBy: filter.exact ? "exact" : filter.match ? "fuzzy" : null,
+      candidates: filter.match ? [] : filter.candidates.map((candidate) => candidate.canonicalName),
+    })),
+  };
+}
+
+function confidentQueryMatch(
+  candidates: { id: string; canonicalName: string; similarity: number }[],
+) {
+  const [best, runnerUp] = candidates;
+  if (!best || best.similarity < 0.8) return null;
+  if (runnerUp && best.similarity - runnerUp.similarity < 0.1) return null;
+  return best;
 }
 
 function summarizeTraining(training: Awaited<ReturnType<typeof loadTrainingRange>>) {

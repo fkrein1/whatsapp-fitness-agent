@@ -472,6 +472,40 @@ describe("fitness repository", () => {
     ]);
   });
 
+  it("uses a unique strong alias typo for training queries", async () => {
+    const db = createDatabase(env.DB);
+    const sourceMessageId = await claimSourceMessage(db, sourceMessage("fuzzy-training"));
+    await saveIngestion(
+      db,
+      sourceMessageId!,
+      {
+        events: [workoutEvent("2040-02-03T12:00:00Z", "Bench press", "Bench Press")],
+        query: null,
+        reply: "Recorded.",
+      },
+      new Date("2040-02-03T12:00:00Z"),
+    );
+
+    const training = await queryTraining(db, {
+      range: { startDate: "2040-02-01", endDate: "2040-02-28" },
+      detail: "compact",
+      compare: "none",
+      exercises: ["supno"],
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(training.filters).toEqual([
+      {
+        submittedName: "supno",
+        matched: "Bench Press",
+        matchedBy: "fuzzy",
+        candidates: [],
+      },
+    ]);
+    expect(training.summary.sessions).toBe(1);
+  });
+
   it("queries meals by range with compact, full, and previous-period views", async () => {
     const db = createDatabase(env.DB);
     const sourceMessageId = await claimSourceMessage(db, sourceMessage("range-meals"));
@@ -713,6 +747,27 @@ function mealEvent(occurredAt: string, summary: string, caloriesKcal: number) {
       },
     ],
     exerciseSets: [],
+    measurements: [],
+  };
+}
+
+function workoutEvent(occurredAt: string, summary: string, exercise: string) {
+  return {
+    kind: "workout" as const,
+    occurredAt,
+    summary,
+    confidence: 1,
+    mealItems: [],
+    exerciseSets: [
+      {
+        exercise,
+        setNumber: 1,
+        reps: 8,
+        weightKg: 60,
+        durationSeconds: null,
+        distanceMeters: null,
+      },
+    ],
     measurements: [],
   };
 }
