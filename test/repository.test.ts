@@ -6,8 +6,10 @@ import { createDatabase } from "../src/db/client";
 import {
   approveLatestMealProposal,
   cancelLatestMealProposal,
+  chunksForD1Insert,
   claimSourceMessage,
   createMealProposal,
+  deleteMeals,
   getAgentTurnEvents,
   getDailyCalories,
   getDailyMeals,
@@ -36,6 +38,15 @@ import {
 } from "../src/db/schema";
 
 describe("fitness repository", () => {
+  it("keeps D1 inserts within the 100-bound-parameter limit", () => {
+    expect(
+      chunksForD1Insert(
+        Array.from({ length: 10 }, (_, index) => index),
+        11,
+      ).map((chunk) => chunk.length),
+    ).toEqual([9, 1]);
+  });
+
   it("claims a WhatsApp message only once", async () => {
     const db = createDatabase(env.DB);
     const input = {
@@ -217,6 +228,28 @@ describe("fitness repository", () => {
         nutritionSource: "user_provided",
       }),
     ).rejects.toThrow();
+  });
+
+  it("rolls back the event when a meal item insert fails", async () => {
+    const db = createDatabase(env.DB);
+    const sourceMessageId = await claimSourceMessage(db, sourceMessage("atomic-meal"));
+    const invalidMeal = mealEvent("2040-06-13T18:00:00Z", "Invalid lunch", -1);
+
+    await expect(
+      saveIngestion(
+        db,
+        sourceMessageId!,
+        { events: [invalidMeal], query: null, reply: "Saved." },
+        new Date("2040-06-13T18:00:00Z"),
+        { externalKeyPrefix: "atomic-meal" },
+      ),
+    ).rejects.toThrow();
+    expect(
+      await db
+        .select()
+        .from(fitnessEvents)
+        .where(eq(fitnessEvents.sourceMessageId, sourceMessageId!)),
+    ).toEqual([]);
   });
 
   it("does not save an image meal until the user approves it", async () => {
@@ -691,9 +724,9 @@ describe("fitness repository", () => {
       }),
     );
 
-    await manageRecords(db, correctionSourceId!, {
-      changes: [{ action: "delete_event", eventRef: meal.ref, reason: "duplicate" }],
-    });
+    await expect(
+      deleteMeals(db, correctionSourceId!, [meal.ref], "duplicate"),
+    ).resolves.toMatchObject({ deletedMeals: 1 });
     const afterDelete = await queryTimeline(db, {
       range: { startDate: "2042-05-12", endDate: "2042-05-12" },
       detail: "compact",

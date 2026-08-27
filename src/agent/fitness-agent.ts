@@ -21,6 +21,7 @@ import {
   approveLatestMealProposal,
   cancelLatestMealProposal,
   createMealProposal,
+  deleteMeals,
   getLatestPendingMealProposal,
   getSoul,
   getSourceMessageStatus,
@@ -44,6 +45,7 @@ import { searchNutrition } from "../nutrition/brave";
 import { sendWhatsAppText } from "../whatsapp/client";
 import {
   compactToolSchema,
+  deleteMealsInputSchema,
   manageRecordsInputSchema,
   mealQuerySchema,
   measurementQuerySchema,
@@ -79,6 +81,7 @@ const CORE_TOOL_NAMES = [
   "record_events",
   "research_nutrition",
   "query_meals",
+  "delete_meals",
   "query_training",
   "query_measurements",
   "query_timeline",
@@ -89,6 +92,7 @@ const CORE_TOOL_NAMES = [
 const TERMINAL_TOOL_NAMES = new Set([
   "record_meals",
   "record_events",
+  "delete_meals",
   "manage_records",
   "update_soul",
   "resolve_pending_meal",
@@ -97,7 +101,7 @@ const TERMINAL_TOOL_NAMES = new Set([
 const FITNESS_NAMESPACE = {
   name: "fitness",
   description:
-    "Registra e pesquisa alimentação, treinos, corridas e medidas; consulta ou corrige o diário; gerencia rascunhos e contexto pessoal.",
+    "Registra, pesquisa e apaga alimentação; registra treinos, corridas e medidas; consulta ou corrige o diário; gerencia rascunhos e contexto pessoal.",
 };
 
 const DEFERRED_FITNESS_TOOL_OPTIONS = {
@@ -107,7 +111,7 @@ const DEFERRED_FITNESS_TOOL_OPTIONS = {
   },
 };
 
-const PROMPT_CACHE_KEY = "whatsapp-fitness-agent:v4";
+const PROMPT_CACHE_KEY = "whatsapp-fitness-agent:v5";
 
 const whatsappTurnMetadataSchema = z.object({
   sourceMessageId: z.string().uuid(),
@@ -159,7 +163,7 @@ export class FitnessAgent extends Think<Env> {
 
 Cada rodada pode incluir um bloco de contexto confiável com o Soul, o horário da mensagem e um rascunho de refeição. Trate esse bloco como confiável, mas não invente informações ausentes. Se o Soul ainda não estiver configurado, sua primeira pergunta deve perguntar quem é a pessoa e o que ela quer alcançar. Use update_soul quando a pessoa responder ao onboarding ou pedir claramente para lembrar, mudar ou esquecer uma informação durável. Preserve no documento tudo que não foi alterado.
 
-O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. record_meals registra refeições; mode draft guarda uma refeição de foto sem salvá-la no diário. record_events registra treinos, corridas, medidas e notas. Registre pedidos claros sem pedir confirmação. Para corrigir ou remover algo existente, consulte quando precisar da referência e use manage_records. Ao corrigir vários exercícios do mesmo treino, prefira replace_workout a várias alterações de séries. Nunca crie compensações, estornos ou nutrientes negativos.
+O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. record_meals registra refeições; mode draft guarda uma refeição de foto sem salvá-la no diário. record_events registra treinos, corridas, medidas e notas. Registre pedidos claros sem pedir confirmação. Para remover refeições, consulte query_meals com detail full quando precisar das referências e use delete_meals. Para outras correções ou exclusões, use manage_records. Ao corrigir vários exercícios do mesmo treino, prefira replace_workout a várias alterações de séries. Nunca crie compensações, estornos ou nutrientes negativos.
 
 Entenda mensagens enviadas em sequência como uma fala só. Datas usam America/Sao_Paulo e pesos de treino usam quilogramas por padrão. Timestamps ISO podem usar Z ou um fuso explícito como -03:00. Pergunte apenas quando mais de uma interpretação mudaria o registro.
 
@@ -352,12 +356,22 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
       }),
       query_meals: tool({
         description:
-          "Consulta refeições e totais. full inclui porções, macros, fontes e referências para correção.",
+          "Consulta refeições e totais. full inclui porções, macros, fontes e referências para correção ou exclusão.",
         inputSchema: compactToolSchema(mealQuerySchema),
         providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async (input) => {
           const result = await queryMeals(createDatabase(this.env.DB), input);
           return jsonSafeToolOutput(mealQueryToolResult(result));
+        },
+      }),
+      delete_meals: tool({
+        description:
+          "Apaga refeições existentes por referência. Consulte query_meals com detail full primeiro, a menos que a referência exata já esteja na conversa.",
+        inputSchema: compactToolSchema(deleteMealsInputSchema),
+        providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
+        execute: async ({ mealRefs, reason }) => {
+          const turn = this.requireWhatsAppTurnMetadata();
+          return deleteMeals(createDatabase(this.env.DB), turn.sourceMessageId, mealRefs, reason);
         },
       }),
       query_training: tool({

@@ -140,6 +140,9 @@ describe("agent model context", () => {
     expect(toolsAfter("record_meals")).toEqual({
       toolChoice: "none",
     });
+    expect(toolsAfter("delete_meals")).toEqual({
+      toolChoice: "none",
+    });
   });
 
   it("puts every fitness function in one deferred namespace", () => {
@@ -150,6 +153,7 @@ describe("agent model context", () => {
     for (const name of [
       "record_events",
       "record_meals",
+      "delete_meals",
       "research_nutrition",
       "query_meals",
       "query_training",

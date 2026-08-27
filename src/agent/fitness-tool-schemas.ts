@@ -112,6 +112,19 @@ export const recordEventsInputSchema = z.object({
 
 export const mealQuerySchema = queryOptionsSchema;
 
+export const deleteMealsInputSchema = z.object({
+  mealRefs: z
+    .array(z.string().uuid())
+    .min(1)
+    .max(20)
+    .describe("Meal references returned by query_meals with detail full."),
+  reason: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe("User's reason, such as duplicate or logged by mistake."),
+});
+
 export const trainingQuerySchema = queryOptionsSchema.extend({
   exercises: z
     .array(z.string().min(1))
@@ -336,6 +349,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 export type QueryOptions = z.infer<typeof queryOptionsSchema>;
 export type MealQuery = z.infer<typeof mealQuerySchema>;
+export type DeleteMealsInput = z.infer<typeof deleteMealsInputSchema>;
 export type TrainingQuery = z.infer<typeof trainingQuerySchema>;
 export type MeasurementQuery = z.infer<typeof measurementQuerySchema>;
 export type TimelineQuery = z.infer<typeof timelineQuerySchema>;

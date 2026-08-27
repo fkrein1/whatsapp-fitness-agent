@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   compactToolSchema,
+  deleteMealsInputSchema,
   manageRecordsInputSchema,
   mealQuerySchema,
   measurementQuerySchema,
@@ -109,6 +110,15 @@ describe("fitness tool schemas", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts explicit meal deletion by queried reference", () => {
+    expect(
+      deleteMealsInputSchema.safeParse({
+        mealRefs: [crypto.randomUUID(), crypto.randomUUID()],
+        reason: "duplicado",
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects negative nutrition in meal corrections", () => {
     const result = manageRecordsInputSchema.safeParse({
       changes: [
@@ -170,6 +180,7 @@ describe("fitness tool schemas", () => {
     const schemas = [
       recordEventsInputSchema,
       recordMealsInputSchema,
+      deleteMealsInputSchema,
       mealQuerySchema,
       trainingQuerySchema,
       measurementQuerySchema,

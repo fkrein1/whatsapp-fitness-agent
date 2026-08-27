@@ -26,7 +26,10 @@ import {
 } from "./schema";
 import type { MessageInputType } from "./schema";
 
-const D1_CHILD_INSERT_CHUNK_SIZE = 10;
+const D1_MAX_BOUND_PARAMETERS = 100;
+const MEAL_ITEM_INSERT_COLUMN_COUNT = 11;
+const EXERCISE_SET_INSERT_COLUMN_COUNT = 9;
+const MEASUREMENT_INSERT_COLUMN_COUNT = 5;
 
 export async function getSoul(db: Database, senderId: string) {
   const [current] = await db
@@ -94,10 +97,11 @@ export async function updateSoul(
   return { changed: true, revision };
 }
 
-function chunksOf<T>(values: T[]) {
+export function chunksForD1Insert<T>(values: T[], columnsPerRow: number) {
+  const chunkSize = Math.max(1, Math.floor(D1_MAX_BOUND_PARAMETERS / columnsPerRow));
   const chunks: T[][] = [];
-  for (let index = 0; index < values.length; index += D1_CHILD_INSERT_CHUNK_SIZE) {
-    chunks.push(values.slice(index, index + D1_CHILD_INSERT_CHUNK_SIZE));
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
   }
   return chunks;
 }
@@ -452,79 +456,80 @@ export async function saveIngestion(
       createdAt: new Date(),
     };
 
-    const insertedEvent = externalKey
+    const [existingEvent] = externalKey
       ? await db
-          .insert(fitnessEvents)
-          .values(eventValues)
-          .onConflictDoNothing({ target: fitnessEvents.externalKey })
-          .returning({ id: fitnessEvents.id })
-      : await db.insert(fitnessEvents).values(eventValues).returning({ id: fitnessEvents.id });
-    const [savedEvent] = insertedEvent.length
-      ? insertedEvent
-      : await db
           .select({ id: fitnessEvents.id })
           .from(fitnessEvents)
-          .where(eq(fitnessEvents.externalKey, externalKey!))
-          .limit(1);
-    const eventId = savedEvent.id;
-    if (insertedEvent.length) insertedEvents += 1;
-    else reusedEvents += 1;
+          .where(eq(fitnessEvents.externalKey, externalKey))
+          .limit(1)
+      : [];
+    const eventId = existingEvent?.id ?? newEventId;
+    const eventWrite = existingEvent
+      ? db
+          .update(fitnessEvents)
+          .set({
+            kind: event.kind,
+            occurredAt,
+            summary: event.summary,
+            confidence: event.confidence,
+            details: {},
+            updatedAt: new Date(),
+            deletedAt: null,
+          })
+          .where(eq(fitnessEvents.id, eventId))
+      : db
+          .insert(fitnessEvents)
+          .values({ ...eventValues, id: eventId })
+          .onConflictDoNothing({ target: fitnessEvents.externalKey });
 
-    if (externalKey) {
-      await db
-        .update(fitnessEvents)
-        .set({
-          kind: event.kind,
-          occurredAt,
-          summary: event.summary,
-          confidence: event.confidence,
-          details: {},
-          updatedAt: new Date(),
-          deletedAt: null,
-        })
-        .where(eq(fitnessEvents.id, eventId));
-      await db.delete(mealItems).where(eq(mealItems.eventId, eventId));
-      await db.delete(exerciseSets).where(eq(exerciseSets.eventId, eventId));
-      await db.delete(measurements).where(eq(measurements.eventId, eventId));
-    }
-
-    if (event.mealItems.length) {
-      const values = event.mealItems.map((item) => ({
+    const mealValues = event.mealItems.map((item) => ({
+      id: crypto.randomUUID(),
+      eventId,
+      ...item,
+      nutritionSource: item.nutritionSource ?? "model_estimate",
+    }));
+    const exerciseValues: (typeof exerciseSets.$inferInsert)[] = [];
+    for (const set of event.exerciseSets) {
+      const exercise = await registerExercise(db, set.exercise);
+      exerciseValues.push({
         id: crypto.randomUUID(),
         eventId,
-        ...item,
-        nutritionSource: item.nutritionSource ?? "model_estimate",
-      }));
-      for (const chunk of chunksOf(values)) await db.insert(mealItems).values(chunk);
+        exerciseId: exercise.id,
+        originalName: cleanExerciseName(set.exercise),
+        setNumber: set.setNumber,
+        reps: set.reps,
+        weightKg: set.weightKg,
+        durationSeconds: set.durationSeconds,
+        distanceMeters: set.distanceMeters,
+      });
     }
+    const measurementValues = event.measurements.map((measurement) => ({
+      id: crypto.randomUUID(),
+      eventId,
+      ...measurement,
+    }));
+    const cleanupWrites = externalKey
+      ? [
+          db.delete(mealItems).where(eq(mealItems.eventId, eventId)),
+          db.delete(exerciseSets).where(eq(exerciseSets.eventId, eventId)),
+          db.delete(measurements).where(eq(measurements.eventId, eventId)),
+        ]
+      : [];
+    const childWrites = [
+      ...chunksForD1Insert(mealValues, MEAL_ITEM_INSERT_COLUMN_COUNT).map((chunk) =>
+        db.insert(mealItems).values(chunk),
+      ),
+      ...chunksForD1Insert(exerciseValues, EXERCISE_SET_INSERT_COLUMN_COUNT).map((chunk) =>
+        db.insert(exerciseSets).values(chunk),
+      ),
+      ...chunksForD1Insert(measurementValues, MEASUREMENT_INSERT_COLUMN_COUNT).map((chunk) =>
+        db.insert(measurements).values(chunk),
+      ),
+    ];
 
-    if (event.exerciseSets.length) {
-      const values: (typeof exerciseSets.$inferInsert)[] = [];
-      for (const set of event.exerciseSets) {
-        const exercise = await registerExercise(db, set.exercise);
-        values.push({
-          id: crypto.randomUUID(),
-          eventId,
-          exerciseId: exercise.id,
-          originalName: cleanExerciseName(set.exercise),
-          setNumber: set.setNumber,
-          reps: set.reps,
-          weightKg: set.weightKg,
-          durationSeconds: set.durationSeconds,
-          distanceMeters: set.distanceMeters,
-        });
-      }
-      for (const chunk of chunksOf(values)) await db.insert(exerciseSets).values(chunk);
-    }
-
-    if (event.measurements.length) {
-      const values = event.measurements.map((measurement) => ({
-        id: crypto.randomUUID(),
-        eventId,
-        ...measurement,
-      }));
-      for (const chunk of chunksOf(values)) await db.insert(measurements).values(chunk);
-    }
+    await db.batch([eventWrite, ...cleanupWrites, ...childWrites]);
+    if (existingEvent) reusedEvents += 1;
+    else insertedEvents += 1;
   }
 
   if (options.finalize ?? true) await markSourceMessageProcessed(db, sourceMessageId);
@@ -1230,7 +1235,9 @@ export async function manageRecords(
         });
       }
       await db.delete(exerciseSets).where(eq(exerciseSets.eventId, event.id));
-      for (const chunk of chunksOf(replacementSets)) await db.insert(exerciseSets).values(chunk);
+      for (const chunk of chunksForD1Insert(replacementSets, EXERCISE_SET_INSERT_COLUMN_COUNT)) {
+        await db.insert(exerciseSets).values(chunk);
+      }
       const [afterEvent] = await db
         .update(fitnessEvents)
         .set({
@@ -1308,6 +1315,32 @@ export async function manageRecords(
     receipts.push({ action: change.action, ref, eventRef: child.eventId });
   }
   return { changed: receipts.length, receipts };
+}
+
+export async function deleteMeals(
+  db: Database,
+  sourceMessageId: string,
+  mealRefs: string[],
+  reason: string,
+) {
+  const uniqueRefs = [...new Set(mealRefs)];
+  const activeMeals = await db
+    .select({ id: fitnessEvents.id })
+    .from(fitnessEvents)
+    .where(
+      and(
+        inArray(fitnessEvents.id, uniqueRefs),
+        eq(fitnessEvents.kind, "meal"),
+        isNull(fitnessEvents.deletedAt),
+      ),
+    );
+  if (activeMeals.length !== uniqueRefs.length) {
+    throw new Error("One or more active meals were not found");
+  }
+  const result = await manageRecords(db, sourceMessageId, {
+    changes: uniqueRefs.map((eventRef) => ({ action: "delete_event", eventRef, reason })),
+  });
+  return { deletedMeals: result.changed, receipts: result.receipts };
 }
 
 async function getMealRangeSummary(db: Database, range: { startDate: string; endDate: string }) {
