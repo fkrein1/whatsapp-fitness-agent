@@ -241,6 +241,13 @@ export const manageRecordsInputSchema = z.object({
 
 const pendingMealChangeSchema = z.discriminatedUnion("type", [
   z.object({
+    type: z.literal("replace_meal"),
+    eventIndex: z.number().int().nonnegative(),
+    occurredAt: isoDateTimeSchema.nullable().optional(),
+    summary: z.string().min(1),
+    items: z.array(extractedMealItemSchema).min(1).max(50),
+  }),
+  z.object({
     type: z.literal("update_item"),
     eventIndex: z.number().int().nonnegative(),
     itemIndex: z.number().int().nonnegative(),
@@ -279,7 +286,7 @@ export const pendingMealActionSchema = z.discriminatedUnion("action", [
       .min(1)
       .max(20)
       .describe(
-        "Only the requested changes, using the event and item indexes in the draft summary.",
+        "Only the requested changes, using the indexes in the draft summary. Use replace_meal when the user asks to start over or replace the complete meal.",
       ),
     saveNow: z.boolean().default(false),
   }),

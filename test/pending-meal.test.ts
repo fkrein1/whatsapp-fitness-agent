@@ -78,6 +78,41 @@ describe("pending meal context", () => {
     expect(updated[0]?.mealItems[0].quantity).toBe(2);
   });
 
+  it("keeps original item indexes stable across multiple changes", () => {
+    const updated = applyPendingMealChanges(pendingEvents, [
+      { type: "remove_item", eventIndex: 0, itemIndex: 0 },
+      { type: "update_item", eventIndex: 0, itemIndex: 1, quantity: 2 },
+    ]);
+
+    expect(updated[0]?.mealItems).toEqual([
+      expect.objectContaining({ name: "Banana", quantity: 2, caloriesKcal: 180 }),
+    ]);
+  });
+
+  it("replaces a complete meal in one change", () => {
+    const replacement = {
+      ...pendingEvents[0]!.mealItems[1]!,
+      name: "Almoço novo",
+      quantity: 552,
+      unit: "g",
+    };
+    const updated = applyPendingMealChanges(pendingEvents, [
+      {
+        type: "replace_meal",
+        eventIndex: 0,
+        summary: "Refeito do zero",
+        items: [replacement],
+      },
+    ]);
+
+    expect(updated[0]).toEqual(
+      expect.objectContaining({
+        summary: "Refeito do zero",
+        mealItems: [replacement],
+      }),
+    );
+  });
+
   it("rejects invalid pending indexes", () => {
     expect(() =>
       applyPendingMealChanges(pendingEvents, [

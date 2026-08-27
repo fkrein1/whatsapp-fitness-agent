@@ -37,9 +37,18 @@ export function applyPendingMealChanges(
   changes: PendingMealEdit["changes"],
 ) {
   const updated = structuredClone(events);
+  const indexedItems = updated.map((event) => [...event.mealItems]);
 
   for (const change of changes) {
     const event = getMealEvent(updated, change.eventIndex);
+
+    if (change.type === "replace_meal") {
+      if (change.occurredAt !== undefined) event.occurredAt = change.occurredAt;
+      event.summary = change.summary;
+      event.mealItems = structuredClone(change.items);
+      indexedItems[change.eventIndex] = [...event.mealItems];
+      continue;
+    }
 
     if (change.type === "update_meal") {
       if (change.occurredAt !== undefined) event.occurredAt = change.occurredAt;
@@ -52,16 +61,14 @@ export function applyPendingMealChanges(
       continue;
     }
 
-    const item = event.mealItems[change.itemIndex];
-    if (!item) {
+    const item = indexedItems[change.eventIndex]?.[change.itemIndex];
+    const currentItemIndex = item ? event.mealItems.indexOf(item) : -1;
+    if (!item || currentItemIndex < 0) {
       throw new Error(`Item pendente inexistente: m${change.eventIndex}.i${change.itemIndex}`);
     }
 
     if (change.type === "remove_item") {
-      if (event.mealItems.length === 1) {
-        throw new Error("Uma refeição pendente precisa manter pelo menos um item");
-      }
-      event.mealItems.splice(change.itemIndex, 1);
+      event.mealItems.splice(currentItemIndex, 1);
       continue;
     }
 
@@ -98,6 +105,10 @@ export function applyPendingMealChanges(
         if (typeof value === "number") Object.assign(item, { [field]: round(value * ratio) });
       }
     }
+  }
+
+  if (updated.some((event) => event.kind === "meal" && event.mealItems.length === 0)) {
+    throw new Error("Uma refeição pendente precisa manter pelo menos um item");
   }
 
   return updated;

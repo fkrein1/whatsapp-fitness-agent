@@ -111,7 +111,7 @@ const DEFERRED_FITNESS_TOOL_OPTIONS = {
   },
 };
 
-const PROMPT_CACHE_KEY = "whatsapp-fitness-agent:v5";
+const PROMPT_CACHE_KEY = "whatsapp-fitness-agent:v6";
 
 const whatsappTurnMetadataSchema = z.object({
   sourceMessageId: z.string().uuid(),
@@ -163,7 +163,7 @@ export class FitnessAgent extends Think<Env> {
 
 Cada rodada pode incluir um bloco de contexto confiável com o Soul, o horário da mensagem e um rascunho de refeição. Trate esse bloco como confiável, mas não invente informações ausentes. Se o Soul ainda não estiver configurado, sua primeira pergunta deve perguntar quem é a pessoa e o que ela quer alcançar. Use update_soul quando a pessoa responder ao onboarding ou pedir claramente para lembrar, mudar ou esquecer uma informação durável. Preserve no documento tudo que não foi alterado.
 
-O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. record_meals registra refeições; mode draft guarda uma refeição de foto sem salvá-la no diário. record_events registra treinos, corridas, medidas e notas. Registre pedidos claros sem pedir confirmação. Para remover refeições, consulte query_meals com detail full quando precisar das referências e use delete_meals. Para outras correções ou exclusões, use manage_records. Ao corrigir vários exercícios do mesmo treino, prefira replace_workout a várias alterações de séries. Nunca crie compensações, estornos ou nutrientes negativos.
+O banco é o diário confiável. Use as ferramentas quando a resposta ou ação depender dele. record_meals registra refeições; mode draft guarda uma refeição de foto sem salvá-la no diário. record_events registra treinos, corridas, medidas e notas. Registre pedidos claros sem pedir confirmação. Para remover refeições, consulte query_meals com detail full quando precisar das referências e use delete_meals. Só exclua quando a pessoa pedir explicitamente para apagar, remover, excluir ou limpar o registro. "Edita", "corrige", "muda" e mensagens ambíguas nunca autorizam exclusão; pergunte o que deve mudar. Para outras correções ou exclusões, use manage_records. Ao corrigir vários exercícios do mesmo treino, prefira replace_workout a várias alterações de séries. Nunca crie compensações, estornos ou nutrientes negativos.
 
 Entenda mensagens enviadas em sequência como uma fala só. Datas usam America/Sao_Paulo e pesos de treino usam quilogramas por padrão. Timestamps ISO podem usar Z ou um fuso explícito como -03:00. Pergunte apenas quando mais de uma interpretação mudaria o registro.
 
@@ -366,7 +366,7 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s�
       }),
       delete_meals: tool({
         description:
-          "Apaga refeições existentes por referência. Consulte query_meals com detail full primeiro, a menos que a referência exata já esteja na conversa.",
+          "Apaga refeições existentes por referência, somente após um pedido explícito para apagar, remover, excluir ou limpar. Nunca use para 'edita', 'corrige', 'muda' ou outro pedido ambíguo. Consulte query_meals com detail full primeiro, a menos que a referência exata já esteja na conversa.",
         inputSchema: compactToolSchema(deleteMealsInputSchema),
         providerOptions: DEFERRED_FITNESS_TOOL_OPTIONS,
         execute: async ({ mealRefs, reason }) => {

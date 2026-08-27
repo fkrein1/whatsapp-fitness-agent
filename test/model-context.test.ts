@@ -9,6 +9,14 @@ import {
 } from "../src/agent/fitness-agent";
 
 describe("agent model context", () => {
+  it("requires an explicit deletion request in the system prompt", () => {
+    const agent = Object.create(FitnessAgent.prototype) as FitnessAgent;
+    const prompt = agent.getSystemPrompt();
+
+    expect(prompt).toContain("Só exclua quando a pessoa pedir explicitamente");
+    expect(prompt).toContain('"Edita", "corrige", "muda"');
+  });
+
   it("keeps the current and five previous user turns with their conversational replies", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "too old" },

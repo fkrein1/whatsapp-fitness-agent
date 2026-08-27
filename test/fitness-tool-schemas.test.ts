@@ -147,6 +147,35 @@ describe("fitness tool schemas", () => {
     });
   });
 
+  it("accepts replacing a pending meal from scratch", () => {
+    expect(
+      pendingMealActionSchema.safeParse({
+        action: "edit",
+        changes: [
+          {
+            type: "replace_meal",
+            eventIndex: 0,
+            summary: "Almoço refeito",
+            items: [
+              {
+                name: "Salmão",
+                quantity: 100,
+                unit: "g",
+                caloriesKcal: 208,
+                proteinGrams: 20,
+                carbsGrams: 0,
+                fatGrams: 13,
+                confidence: 0.8,
+                nutritionSource: "model_estimate",
+              },
+            ],
+          },
+        ],
+        saveNow: true,
+      }).success,
+    ).toBe(true);
+  });
+
   it("sends compact JSON Schema while preserving Zod validation", async () => {
     const schema = compactToolSchema(mealQuerySchema);
     const serialized = JSON.stringify(await schema.jsonSchema);
