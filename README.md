@@ -1,3 +1,5 @@
+
+
 # WhatsApp fitness agent
 
 A single-user fitness log that lives in WhatsApp. Send a workout, run, meal photo, voice note, or body-weight update. The agent extracts structured data, stores confirmed records in Cloudflare D1, and answers questions about recent activity.
@@ -158,6 +160,7 @@ Callback URL: https://<worker-name>.<account-subdomain>.workers.dev/webhook
 Verify token: the value of WHATSAPP_VERIFY_TOKEN
 Webhook field: messages
 Client certificate attachment: off
+Privacy policy URL: https://<worker-name>.<account-subdomain>.workers.dev/privacy
 ```
 
 Subscribe the app to the WhatsApp Business Account separately. A valid callback does not imply that the WABA subscription exists.
