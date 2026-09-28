@@ -53,7 +53,7 @@ WhatsApp
   -> Hono Worker with signature and sender checks
   -> Cloudflare Think agent for durable, queued multimodal turns and tool calls
   -> Cloudflare Whisper for voice-note transcription
-  -> GPT-5.6 Luna for text, image understanding, reasoning, and tool selection
+  -> GPT-6 Luna for text, image understanding, reasoning, and tool selection
   -> Drizzle ORM and Cloudflare D1
   -> WhatsApp reply
 ```
@@ -64,7 +64,7 @@ Think stores conversation, queue, and execution state in Durable Object SQLite. 
 
 Text, photos, and transcribed voice notes enter Think's durable queue. The first message schedules an immediate flush. Messages received before that flush runs can join the same submission. Messages received while a submission is pending or running stay buffered for the next submission. Each submission contains at most eight messages and produces one reply.
 
-The model sees the current submission plus the previous five user turns and their replies. It keeps media only for the current submission and removes completed tool calls and results from conversational context. GPT-5.6 uses implicit prompt caching so a tool-result continuation can reuse the first call's prefix. Fitness functions live in one deferred namespace, so native tool search loads their schemas only when needed. Meals have a focused recorder for saved and draft entries; the other recorder handles workouts, runs, measurements, and notes. Terminal writes disable further tools before the final reply.
+The model sees the current submission plus the previous five user turns and their replies. It keeps media only for the current submission and removes completed tool calls and results from conversational context. GPT-6 uses implicit prompt caching so a tool-result continuation can reuse the first call's prefix. Fitness functions live in one deferred namespace, so native tool search loads their schemas only when needed. Meals have a focused recorder for saved and draft entries; the other recorder handles workouts, runs, measurements, and notes. Terminal writes disable further tools before the final reply.
 
 Exercises live in a catalog with stable IDs and a separate alias table. Before recording a workout, the agent checks submitted names against that catalog. Known variants such as `RDL` and `Romanian Deadlift (RDL)` share one history. For an unknown movement, the agent either registers a new exercise or attaches the name as an alias when an existing match is clear. The original submitted name remains on each set.
 
@@ -78,7 +78,7 @@ Corrections update the selected event or child record and append its before/afte
 - Cloudflare Agents SDK, Think, and Durable Objects
 - Hono
 - Drizzle ORM and Drizzle Kit
-- GPT-5.6 Luna with vision and structured tool calls
+- GPT-6 Luna with vision and structured tool calls
 - Cloudflare Whisper Large v3 Turbo
 - Brave Search API for branded-food nutrition research
 - Zod
