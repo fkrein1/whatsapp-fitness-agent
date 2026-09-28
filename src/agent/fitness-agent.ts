@@ -155,7 +155,7 @@ export class FitnessAgent extends Think<Env> {
       binding: this.env.AI,
       gateway: "default",
     });
-    return openai.responses("gpt-5.6-luna");
+    return openai.responses("gpt-6-luna");
   }
 
   getSystemPrompt() {
@@ -216,7 +216,7 @@ Consultas compactas bastam normalmente. Use full quando a pessoa pedir itens, s√
         burstSize: turn.sourceMessageIds.length,
         storedMessageCount: context.messages.length,
         modelMessageCount: modelMessages.length,
-        model: "openai/gpt-5.6-luna",
+        model: "openai/gpt-6-luna",
         transport: "responses",
       });
     }
